@@ -5,25 +5,32 @@ import { getDb } from "./db";
 
 export async function listEmployeeMaster(includeInactive = true) {
   const db = await getDb(); if (!db) throw new Error("Database is not available");
-  return db.select().from(employees).where(includeInactive ? undefined : eq(employees.isActive, true)).orderBy(asc(employees.empCode));
+  const rows = await db.select().from(employees).where(includeInactive ? undefined : eq(employees.isActive, true)).orderBy(asc(employees.empCode));
+  return rows.map(({ passwordHash: _passwordHash, ...row }) => row);
 }
 export async function createEmployee(input: EmployeeInput) {
   const db = await getDb(); if (!db) throw new Error("Database is not available");
   await db.insert(employees).values({ ...input, empCode: input.empCode.trim().toUpperCase(), designation: input.designation || null, department: input.department || null, mobile: input.mobile || null });
   const [row] = await db.select().from(employees).where(eq(employees.empCode, input.empCode.trim().toUpperCase())).limit(1);
-  return row;
+  if (!row) return row;
+  const { passwordHash: _passwordHash, ...safe } = row;
+  return safe;
 }
 export async function updateEmployee(id: number, input: EmployeeInput) {
   const db = await getDb(); if (!db) throw new Error("Database is not available");
   await db.update(employees).set({ ...input, empCode: input.empCode.trim().toUpperCase(), designation: input.designation || null, department: input.department || null, mobile: input.mobile || null }).where(eq(employees.id, id));
   const [row] = await db.select().from(employees).where(eq(employees.id, id)).limit(1);
-  return row ?? null;
+  if (!row) return null;
+  const { passwordHash: _passwordHash, ...safe } = row;
+  return safe;
 }
 export async function setEmployeeActive(empCode: string, isActive: boolean) {
   const db = await getDb(); if (!db) throw new Error("Database is not available");
   await db.update(employees).set({ isActive }).where(eq(employees.empCode, empCode));
   const [row] = await db.select().from(employees).where(eq(employees.empCode, empCode)).limit(1);
-  return row ?? null;
+  if (!row) return null;
+  const { passwordHash: _passwordHash, ...safe } = row;
+  return safe;
 }
 
 export async function submitMonthlyPlan(input: MonthlyPlanSubmitInput) {
@@ -62,6 +69,25 @@ export async function listMonthlyPlanReport(month: string, empCode?: string) {
     const plan = planByCode.get(employee.empCode);
     const planItems = plan ? itemsByPlan.get(plan.id) ?? [] : [];
     return { empCode: employee.empCode, name: employee.employeeName, month, status: plan?.status ?? "Not submitted", version: plan?.version ?? 0, plannedVisits: planItems.length, distinctCustomers: new Set(planItems.map(item => item.customerName.trim().toLocaleLowerCase("en-IN"))).size, ticketsRequested: planItems.filter(item => item.applyForTicket).length, planItems, plan };
+  });
+}
+
+/** Current submitted version only; monthly plan replacement keeps one live version per employee/month. */
+export async function listExecutiveMonthlyTravel(month: string) {
+  const db = await getDb(); if (!db) throw new Error("Database is not available");
+  const plans = await db.select().from(monthlyPlans).where(and(eq(monthlyPlans.planMonth, month), eq(monthlyPlans.status, "Submitted")));
+  const planIds = plans.map(plan => plan.id);
+  if (!planIds.length) return [];
+  const [items, roster] = await Promise.all([
+    db.select().from(monthlyPlanItems).where(inArray(monthlyPlanItems.planId, planIds)).orderBy(asc(monthlyPlanItems.plannedDate), asc(monthlyPlanItems.id)),
+    db.select().from(employees),
+  ]);
+  const employeeByCode = new Map(roster.map(employee => [employee.empCode, employee]));
+  const planById = new Map(plans.map(plan => [plan.id, plan]));
+  return items.map(item => {
+    const plan = planById.get(item.planId)!;
+    const employee = employeeByCode.get(plan.empCode);
+    return { id: item.id, plannedDate: item.plannedDate, empCode: plan.empCode, employeeName: plan.employeeName, department: employee?.department ?? "", customerName: item.customerName, location: item.location, purpose: item.purpose, remarks: item.remarks ?? "", planMonth: month, version: plan.version, submittedAt: plan.submittedAt };
   });
 }
 export async function listPlanHolidays(from?: string, to?: string) {

@@ -1,9 +1,9 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { empCodeSchema, employeeInputSchema, employeeSetActiveSchema, employeeUpdateSchema, followUpInputSchema, followUpListSchema, holidayInputSchema, indiaDateString, monthSchema, monthlyPlanItemInputSchema, monthlyPlanSheetQuerySchema, monthlyPlanSubmitSchema, monthlyPlanUploadValidationSchema, nextMondayDate, planInputSchema, planListFilterSchema, planUpdateSchema, visitInputSchema, visitListFilterSchema, visitUpdateSchema } from "../../shared/fieldOps";
-import { publicProcedure, router } from "../_core/trpc";
+import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import { countVisitsThrough, createPlan, createVisit, deletePlan, deleteVisit, getEmployeeNames, getPlan, getRecentVisits, getVisit, listPlans, listVisits, listVisitsThroughPage, updatePlan, updateVisit } from "../fieldOpsDb";
-import { cancelFollowUp, createEmployee, createFollowUp, createPlanHoliday, deletePlanHoliday, followUpDueSummary, listEmployeeMaster, listFollowUps, listMonthlyPlanReport, listPlanHolidays, markFollowUpDone, rescheduleFollowUp, setEmployeeActive, submitMonthlyPlan, updateEmployee } from "../fieldOpsV3Db";
+import { cancelFollowUp, createEmployee, createFollowUp, createPlanHoliday, deletePlanHoliday, followUpDueSummary, listEmployeeMaster, listFollowUps, listMonthlyPlanReport, listExecutiveMonthlyTravel, listPlanHolidays, markFollowUpDone, rescheduleFollowUp, setEmployeeActive, submitMonthlyPlan, updateEmployee } from "../fieldOpsV3Db";
 import { loadMonthlyPlanSheetData } from "../exports/monthlyPlanSheet/buildData";
 
 const dateRangeSchema = z.object({ from: z.string().optional(), to: z.string().optional(), employeeName: z.string().optional() });
@@ -16,41 +16,58 @@ function requireRow<T>(row: T | null, label: string): T {
 }
 
 export const fieldOpsRouter = router({
-  employeeNames: publicProcedure.query(async () => getEmployeeNames()),
+  employeeNames: adminProcedure.query(async () => getEmployeeNames()),
   employees: router({
-    list: publicProcedure.input(z.object({ includeInactive: z.boolean().optional() }).optional()).query(({ input }) => listEmployeeMaster(input?.includeInactive ?? true)),
-    create: publicProcedure.input(employeeInputSchema).mutation(async ({ input }) => {
+    list: protectedProcedure.input(z.object({ includeInactive: z.boolean().optional() }).optional()).query(async ({ ctx, input }) => {
+      const rows = ctx.user.role === "admin" ? await listEmployeeMaster(input?.includeInactive ?? true) : await listEmployeeMaster(false);
+      return rows.filter(row => ctx.user.role === "admin" || row.empCode === ctx.user.empCode);
+    }),
+    create: adminProcedure.input(employeeInputSchema).mutation(async ({ input }) => {
       try { return await createEmployee(input); } catch (error) { throw new TRPCError({ code: "CONFLICT", message: "That Emp Code already exists.", cause: error }); }
     }),
-    update: publicProcedure.input(employeeUpdateSchema).mutation(async ({ input }) => {
+    update: adminProcedure.input(employeeUpdateSchema).mutation(async ({ input }) => {
       const { id, ...fields } = input;
       try { return requireRow(await updateEmployee(id, fields), "Employee"); } catch (error) { if (error instanceof TRPCError) throw error; throw new TRPCError({ code: "CONFLICT", message: "That Emp Code already exists.", cause: error }); }
     }),
-    setActive: publicProcedure.input(employeeSetActiveSchema).mutation(async ({ input }) => requireRow(await setEmployeeActive(input.empCode, input.isActive), "Employee")),
+    setActive: adminProcedure.input(employeeSetActiveSchema).mutation(async ({ ctx, input }) => {
+      if (!input.isActive && input.empCode.toUpperCase() === ctx.user?.empCode) throw new TRPCError({ code: "BAD_REQUEST", message: "You cannot deactivate your own account." });
+      return requireRow(await setEmployeeActive(input.empCode, input.isActive), "Employee");
+    }),
   }),
   visits: router({
-    list: publicProcedure.input(visitListFilterSchema.optional()).query(({ input }) => listVisits(input ?? {})),
-    get: publicProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ input }) => requireRow(await getVisit(input.id), "Visit")),
-    recent: publicProcedure.input(z.object({ limit: z.number().int().min(1).max(100).optional() }).optional()).query(({ input }) => getRecentVisits(input?.limit ?? 100)),
-    create: publicProcedure.input(visitInputSchema).mutation(async ({ input }) => requireRow(await createVisit(input), "Visit")),
-    update: publicProcedure.input(visitUpdateSchema).mutation(async ({ input }) => {
+    list: adminProcedure.input(visitListFilterSchema.optional()).query(({ input }) => listVisits(input ?? {})),
+    get: adminProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ input }) => requireRow(await getVisit(input.id), "Visit")),
+    recent: protectedProcedure.input(z.object({ limit: z.number().int().min(1).max(100).optional() }).optional()).query(({ ctx, input }) => getRecentVisits(input?.limit ?? 100, ctx.user.role === "admin" ? undefined : ctx.user.empCode)),
+    create: protectedProcedure.input(visitInputSchema).mutation(async ({ ctx, input }) => requireRow(await createVisit({ ...input, empCode: ctx.user.role === "admin" ? input.empCode : ctx.user.empCode }), "Visit")),
+    update: adminProcedure.input(visitUpdateSchema).mutation(async ({ input }) => {
       const { id, ...fields } = input;
       return requireRow(await updateVisit(id, fields), "Visit");
     }),
-    delete: publicProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => deleteVisit(input.id)),
+    delete: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => deleteVisit(input.id)),
   }),
   plans: router({
-    list: publicProcedure.input(planListFilterSchema.optional()).query(({ input }) => listPlans(input ?? {})),
-    get: publicProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ input }) => requireRow(await getPlan(input.id), "Plan")),
-    create: publicProcedure.input(planInputSchema).mutation(async ({ input }) => requireRow(await createPlan(input), "Plan")),
-    update: publicProcedure.input(planUpdateSchema).mutation(async ({ input }) => {
-      const { id, ...fields } = input;
-      return requireRow(await updatePlan(id, fields), "Plan");
+    list: protectedProcedure.input(planListFilterSchema.optional()).query(({ ctx, input }) => listPlans({ ...(input ?? {}), ...(ctx.user.role === "admin" ? {} : { empCode: ctx.user.empCode }) })),
+    get: protectedProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      const plan = requireRow(await getPlan(input.id), "Plan");
+      if (ctx.user.role !== "admin" && plan.empCode !== ctx.user.empCode) throw new TRPCError({ code: "NOT_FOUND", message: "Plan was not found." });
+      return plan;
     }),
-    delete: publicProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => deletePlan(input.id)),
+    create: protectedProcedure.input(planInputSchema).mutation(async ({ ctx, input }) => requireRow(await createPlan({ ...input, empCode: ctx.user.role === "admin" ? input.empCode : ctx.user.empCode }), "Plan")),
+    update: protectedProcedure.input(planUpdateSchema).mutation(async ({ ctx, input }) => {
+      const { id, ...fields } = input;
+      const existing = requireRow(await getPlan(id), "Plan");
+      if (ctx.user.role !== "admin" && existing.empCode !== ctx.user.empCode) throw new TRPCError({ code: "NOT_FOUND", message: "Plan was not found." });
+      return requireRow(await updatePlan(id, { ...fields, empCode: ctx.user.role === "admin" ? fields.empCode : ctx.user.empCode }), "Plan");
+    }),
+    delete: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const existing = requireRow(await getPlan(input.id), "Plan");
+      if (ctx.user.role !== "admin" && existing.empCode !== ctx.user.empCode) throw new TRPCError({ code: "NOT_FOUND", message: "Plan was not found." });
+      return deletePlan(input.id);
+    }),
   }),
   reports: router({
-    overview: publicProcedure.query(async () => {
+    executiveTravelSummary: adminProcedure.input(z.object({ month: monthSchema })).query(({ input }) => listExecutiveMonthlyTravel(input.month)),
+    overview: adminProcedure.query(async () => {
       const today = indiaDateString();
       const monthStart = `${today.slice(0, 7)}-01`;
       const monday = nextMondayDate();
@@ -72,18 +89,18 @@ export const fieldOpsRouter = router({
       const trend = months.map(month => ({ month, total: Math.round(trendRows.filter(row => row.visitDate.startsWith(month)).reduce((sum, row) => sum + Number(row.travelCost), 0)) }));
       return { today, visitsToday: todayVisits.length, totalVisitsToDate, activeEmployees, monthlyCost, pendingPlans, trend };
     }),
-    allVisitsToDate: publicProcedure.input(z.object({ page: z.number().int().positive().default(1), pageSize: z.number().int().min(1).max(100).default(25) }).optional()).query(async ({ input }) => {
+    allVisitsToDate: adminProcedure.input(z.object({ page: z.number().int().positive().default(1), pageSize: z.number().int().min(1).max(100).default(25) }).optional()).query(async ({ input }) => {
       const to = indiaDateString();
       const page = input?.page ?? 1;
       const pageSize = input?.pageSize ?? 25;
       const [rows, totalVisits] = await Promise.all([listVisitsThroughPage(to, page, pageSize), countVisitsThrough(to)]);
       return { to, page, pageSize, rows, totalVisits, totalPages: Math.max(1, Math.ceil(totalVisits / pageSize)) };
     }),
-    employee: publicProcedure.input(dateRangeSchema.extend({ employeeName: z.string().min(1) })).query(async ({ input }) => {
+    employee: adminProcedure.input(dateRangeSchema.extend({ employeeName: z.string().min(1) })).query(async ({ input }) => {
       const rows = await listVisits(input);
       return { visits: rows, totalVisits: rows.length, totalCost: rows.reduce((sum, row) => sum + Number(row.travelCost), 0), customers: new Set(rows.map(row => row.customerName.trim().toLocaleLowerCase())).size };
     }),
-    costSummary: publicProcedure.input(dateRangeSchema.optional()).query(async ({ input }) => {
+    costSummary: adminProcedure.input(dateRangeSchema.optional()).query(async ({ input }) => {
       const today = indiaDateString();
       const from = input?.from ?? `${today.slice(0, 7)}-01`;
       const to = input?.to ?? today;
@@ -98,7 +115,7 @@ export const fieldOpsRouter = router({
       }
       return [...groups.values()].map(row => ({ ...row, averageCost: row.visitCount ? row.totalCost / row.visitCount : 0 }));
     }),
-    planVsActual: publicProcedure.input(dateRangeSchema.optional()).query(async ({ input }) => {
+    planVsActual: adminProcedure.input(dateRangeSchema.optional()).query(async ({ input }) => {
       const actualTo = input?.to ? new Date(Date.parse(`${input.to}T00:00:00Z`) + 6 * 86400000).toISOString().slice(0, 10) : undefined;
       const [plans, actuals] = await Promise.all([listPlans({ from: input?.from, to: input?.to, employeeName: input?.employeeName }), listVisits({ from: input?.from, to: actualTo, employeeName: input?.employeeName })]);
       const results: Array<{ id: string; employeeName: string; weekStartingDate: string; plannedCustomerName: string; actualCustomerName: string; plannedLocation: string; actualLocation: string; purpose: string; status: "Visited" | "No-show" | "Unplanned"; actualDate: string; actualOutcome: string }> = [];
@@ -118,23 +135,23 @@ export const fieldOpsRouter = router({
       }
       return results;
     }),
-    upcomingPlans: publicProcedure.input(dateRangeSchema.optional()).query(async ({ input }) => {
+    upcomingPlans: adminProcedure.input(dateRangeSchema.optional()).query(async ({ input }) => {
       const from = input?.from ?? nextMondayDate();
       const end = new Date(`${from}T00:00:00Z`);
       end.setUTCDate(end.getUTCDate() + 6);
       const to = input?.to ?? end.toISOString().slice(0, 10);
       return listPlans({ from, to, employeeName: input?.employeeName });
     }),
-    monthlyPlan: publicProcedure.input(z.object({ month: monthSchema, empCode: empCodeSchema.optional() })).query(({ input }) => listMonthlyPlanReport(input.month, input.empCode)),
-    monthlyPlanSheet: publicProcedure.input(monthlyPlanSheetQuerySchema).query(({ input }) => loadMonthlyPlanSheetData(input.month, input.empCode, { visited: input.visited === "1", blank: input.type === "blank" })),
+    monthlyPlan: protectedProcedure.input(z.object({ month: monthSchema, empCode: empCodeSchema.optional() })).query(({ ctx, input }) => listMonthlyPlanReport(input.month, ctx.user.role === "admin" ? input.empCode : ctx.user.empCode)),
+    monthlyPlanSheet: adminProcedure.input(monthlyPlanSheetQuerySchema).query(({ input }) => loadMonthlyPlanSheetData(input.month, input.empCode, { visited: input.visited === "1", blank: input.type === "blank" })),
   }),
   monthlyPlans: router({
-    template: publicProcedure.input(z.object({ month: monthSchema, empCode: z.union([empCodeSchema, z.literal("ALL")]) })).query(async ({ input }) => {
+    template: adminProcedure.input(z.object({ month: monthSchema, empCode: z.union([empCodeSchema, z.literal("ALL")]) })).query(async ({ input }) => {
       const roster = await listEmployeeMaster(false);
       const selected = input.empCode === "ALL" ? roster : roster.filter(employee => employee.empCode === input.empCode);
       return { month: input.month, employees: selected.map(employee => ({ empCode: employee.empCode, employeeName: employee.employeeName })), rowsPerEmployee: 50, purposes: ["New Lead", "Follow-up", "Service", "Collection", "Other"], travelModes: ["Own Vehicle", "Train", "Flight", "Cab", "Other"] };
     }),
-    validateUpload: publicProcedure.input(monthlyPlanUploadValidationSchema).mutation(async ({ input }) => {
+    validateUpload: adminProcedure.input(monthlyPlanUploadValidationSchema).mutation(async ({ input }) => {
       const roster = await listEmployeeMaster(false);
       const knownCodes = new Set(roster.map(employee => employee.empCode));
       const errors: Array<{ rowNumber: number; field: string; message: string }> = [];
@@ -157,26 +174,26 @@ export const fieldOpsRouter = router({
       const warnings = [...seen.values()].filter(rowNumbers => rowNumbers.length > 1).flatMap(rowNumbers => rowNumbers.slice(1).map(rowNumber => ({ rowNumber, message: `Duplicate Emp Code / planned date / customer combination also appears on row ${rowNumbers[0]}.` })));
       return { validRows, errors, warnings, totalRows: input.rows.length, validCount: validRows.length };
     }),
-    submit: publicProcedure.input(monthlyPlanSubmitSchema).mutation(({ input }) => submitMonthlyPlan(input)),
-    list: publicProcedure.input(z.object({ month: monthSchema, empCode: empCodeSchema.optional() })).query(({ input }) => listMonthlyPlanReport(input.month, input.empCode)),
+    submit: protectedProcedure.input(monthlyPlanSubmitSchema).mutation(({ ctx, input }) => submitMonthlyPlan({ ...input, empCode: ctx.user.role === "admin" ? input.empCode : ctx.user.empCode })),
+    list: protectedProcedure.input(z.object({ month: monthSchema, empCode: empCodeSchema.optional() })).query(({ ctx, input }) => listMonthlyPlanReport(input.month, ctx.user.role === "admin" ? input.empCode : ctx.user.empCode)),
   }),
   followUps: router({
-    create: publicProcedure.input(followUpInputSchema).mutation(async ({ input }) => {
+    create: adminProcedure.input(followUpInputSchema).mutation(async ({ input }) => {
       if (input.followUpDate < indiaDateString()) throw new TRPCError({ code: "BAD_REQUEST", message: "Follow-up date must be today or later." });
       return createFollowUp(input);
     }),
-    list: publicProcedure.input(followUpListSchema.optional()).query(({ input }) => listFollowUps(input ?? {})),
-    markDone: publicProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => requireRow(await markFollowUpDone(input.id), "Follow-up")),
-    reschedule: publicProcedure.input(z.object({ id: z.number().int().positive(), followUpDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), followUpTime: z.string().optional().nullable() })).mutation(async ({ input }) => {
+    list: adminProcedure.input(followUpListSchema.optional()).query(({ input }) => listFollowUps(input ?? {})),
+    markDone: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => requireRow(await markFollowUpDone(input.id), "Follow-up")),
+    reschedule: adminProcedure.input(z.object({ id: z.number().int().positive(), followUpDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), followUpTime: z.string().optional().nullable() })).mutation(async ({ input }) => {
       if (input.followUpDate < indiaDateString()) throw new TRPCError({ code: "BAD_REQUEST", message: "Follow-up date must be today or later." });
       return requireRow(await rescheduleFollowUp(input.id, input.followUpDate, input.followUpTime), "Follow-up");
     }),
-    cancel: publicProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => cancelFollowUp(input.id)),
-    dueSummary: publicProcedure.input(z.object({ empCode: empCodeSchema.optional() }).optional()).query(({ input }) => followUpDueSummary(input?.empCode, indiaDateString())),
+    cancel: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => cancelFollowUp(input.id)),
+    dueSummary: adminProcedure.input(z.object({ empCode: empCodeSchema.optional() }).optional()).query(({ input }) => followUpDueSummary(input?.empCode, indiaDateString())),
   }),
   holidays: router({
-    list: publicProcedure.input(z.object({ from: z.string().optional(), to: z.string().optional() }).optional()).query(({ input }) => listPlanHolidays(input?.from, input?.to)),
-    create: publicProcedure.input(holidayInputSchema).mutation(async ({ input }) => { try { return await createPlanHoliday(input); } catch (error) { throw new TRPCError({ code: "CONFLICT", message: "A holiday is already configured for that date.", cause: error }); } }),
-    delete: publicProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => deletePlanHoliday(input.id)),
+    list: protectedProcedure.input(z.object({ from: z.string().optional(), to: z.string().optional() }).optional()).query(({ input }) => listPlanHolidays(input?.from, input?.to)),
+    create: adminProcedure.input(holidayInputSchema).mutation(async ({ input }) => { try { return await createPlanHoliday(input); } catch (error) { throw new TRPCError({ code: "CONFLICT", message: "A holiday is already configured for that date.", cause: error }); } }),
+    delete: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => deletePlanHoliday(input.id)),
   }),
 });

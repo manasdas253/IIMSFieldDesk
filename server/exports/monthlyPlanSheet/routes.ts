@@ -6,6 +6,7 @@ import { renderMonthlyPlanPdf } from "./renderPdf";
 import { renderMonthlyPlanXlsx } from "./renderXlsx";
 import { renderMonthlyPlanTemplate } from "./renderTemplate";
 import { listEmployeeMaster } from "../../fieldOpsV3Db";
+import { credentialVersion, findActiveEmployee, readSession } from "../../_core/employeeAuth";
 
 function parseQuery(request: Request) {
   return monthlyPlanSheetQuerySchema.parse({
@@ -23,9 +24,17 @@ function jsonFailure(response: Response, error: unknown) {
   const message = error instanceof Error ? error.message : "Export failed.";
   response.status(400).type("application/json").json({ error: message });
 }
+async function requireAdmin(req: Request, res: Response) {
+  const code = await readSession(req);
+  const employee = code ? await findActiveEmployee(code.empCode) : null;
+  if (employee?.role === "admin" && !employee.mustChangePassword && employee.passwordHash && credentialVersion(employee.passwordHash, employee.role) === code?.credentialVersion) return true;
+  res.status(401).json({ error: "Authentication required." });
+  return false;
+}
 export function registerMonthlyPlanExportRoutes(app: Express) {
   app.get("/api/exports/monthly-plan-template.xlsx", async (req, res) => {
     try {
+      if (!await requireAdmin(req, res)) return;
       const month = typeof req.query.month === "string" ? req.query.month : "";
       const empCode = typeof req.query.empCode === "string" ? req.query.empCode : "ALL";
       const validMonth = monthlyPlanSheetQuerySchema.shape.month.parse(month);
@@ -39,6 +48,7 @@ export function registerMonthlyPlanExportRoutes(app: Express) {
   });
   app.get("/api/exports/monthly-plan-sheet.pdf", async (req, res) => {
     try {
+      if (!await requireAdmin(req, res)) return;
       const params = parseQuery(req);
       const sheets = await loadMonthlyPlanSheetData(params.month, params.empCode, { visited: params.visited === "1", blank: params.type === "blank" });
       if (!sheets.length) throw new Error("No employees are available for the selected month.");
@@ -48,6 +58,7 @@ export function registerMonthlyPlanExportRoutes(app: Express) {
   });
   app.get("/api/exports/monthly-plan-sheet.xlsx", async (req, res) => {
     try {
+      if (!await requireAdmin(req, res)) return;
       const params = parseQuery(req);
       const sheets = await loadMonthlyPlanSheetData(params.month, params.empCode, { visited: params.visited === "1", blank: params.type === "blank" });
       if (!sheets.length) throw new Error("No employees are available for the selected month.");
@@ -57,6 +68,7 @@ export function registerMonthlyPlanExportRoutes(app: Express) {
   });
   app.get("/api/exports/monthly-plan-sheet.zip", async (req, res) => {
     try {
+      if (!await requireAdmin(req, res)) return;
       const params = parseQuery(req);
       if (params.empCode !== "ALL") throw new Error("ZIP export requires empCode=ALL.");
       const sheets = await loadMonthlyPlanSheetData(params.month, "ALL", { visited: params.visited === "1", blank: params.type === "blank" });

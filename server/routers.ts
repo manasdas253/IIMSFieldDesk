@@ -1,8 +1,9 @@
 import { router } from "./_core/trpc";
 import { fieldOpsRouter } from "./routers/fieldOps";
+import { authRouter } from "./routers/auth";
 
 export const appRouter = router({
-  // Phase 1 is deliberately unauthenticated. Add identity-aware routers in a later phase.
+  auth: authRouter,
   fieldOps: fieldOpsRouter,
 });
 

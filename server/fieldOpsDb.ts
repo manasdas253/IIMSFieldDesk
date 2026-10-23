@@ -114,13 +114,14 @@ export async function getPlan(id: number) {
   return { ...header, items };
 }
 
-export async function listPlans(filters: { from?: string; to?: string; employeeName?: string } = {}) {
+export async function listPlans(filters: { from?: string; to?: string; employeeName?: string; empCode?: string } = {}) {
   const db = await getDb();
   if (!db) throw new Error("Database is not available");
   const conditions: SQL[] = [];
   if (filters.from) conditions.push(gte(weeklyPlans.weekStartingDate, filters.from));
   if (filters.to) conditions.push(lte(weeklyPlans.weekStartingDate, filters.to));
   if (filters.employeeName) conditions.push(eq(weeklyPlans.employeeName, filters.employeeName));
+  if (filters.empCode) conditions.push(eq(weeklyPlans.empCode, filters.empCode));
   const headers = await db.select().from(weeklyPlans).where(conditions.length ? and(...conditions) : undefined).orderBy(weeklyPlans.weekStartingDate, weeklyPlans.employeeName).limit(2000);
   if (!headers.length) return [];
   const ids = headers.map(plan => plan.id);
@@ -137,10 +138,10 @@ export async function deletePlan(id: number) {
   return { success: true as const };
 }
 
-export async function getRecentVisits(limit = 100) {
+export async function getRecentVisits(limit = 100, empCode?: string) {
   const db = await getDb();
   if (!db) throw new Error("Database is not available");
-  return db.select().from(visits).orderBy(desc(visits.visitDate), desc(visits.createdAt)).limit(limit);
+  return db.select().from(visits).where(empCode ? eq(visits.empCode, empCode) : undefined).orderBy(desc(visits.visitDate), desc(visits.createdAt)).limit(limit);
 }
 
 export async function getEmployeeNames() {

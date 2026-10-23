@@ -16,6 +16,9 @@ const requireUser = t.middleware(async opts => {
   if (!ctx.user) {
     throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
   }
+  if (ctx.user.mustChangePassword && opts.path !== "auth.me" && opts.path !== "auth.changePassword") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Change your temporary password before continuing." });
+  }
 
   return next({
     ctx: {
@@ -27,19 +30,8 @@ const requireUser = t.middleware(async opts => {
 
 export const protectedProcedure = t.procedure.use(requireUser);
 
-export const adminProcedure = t.procedure.use(
-  t.middleware(async opts => {
-    const { ctx, next } = opts;
-
-    if (!ctx.user || ctx.user.role !== 'admin') {
-      throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
-    }
-
-    return next({
-      ctx: {
-        ...ctx,
-        user: ctx.user,
-      },
-    });
-  }),
-);
+export const adminProcedure = protectedProcedure.use(t.middleware(async opts => {
+  const { ctx, next } = opts;
+  if (ctx.user?.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
+  return next({ ctx: { ...ctx, user: ctx.user! } });
+}));

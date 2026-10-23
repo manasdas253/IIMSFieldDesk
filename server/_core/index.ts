@@ -8,8 +8,11 @@ import { appRouter } from "../routers";
 import { registerMonthlyPlanExportRoutes } from "../exports/monthlyPlanSheet/routes";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { bootstrapAdmin } from "./employeeAuth";
 
 async function startServer() {
+  if (!process.env.AUTH_SECRET || process.env.AUTH_SECRET.length < 32) throw new Error("Set AUTH_SECRET in .env (32+ characters). See .env.example.");
+  await bootstrapAdmin();
   const app = express();
   const server = createServer(app);
   app.use(express.json({ limit: "50mb" }));

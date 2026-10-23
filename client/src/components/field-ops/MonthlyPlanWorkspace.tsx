@@ -1,8 +1,10 @@
 import ExcelJS from "exceljs";
-import { useState } from "react";
-import { AlertTriangle, Download, FileSpreadsheet, Upload } from "lucide-react";
+import { useState, type FormEvent } from "react";
+import { AlertTriangle, CalendarDays, Download, FileSpreadsheet, Plus, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
+import { VISIT_PURPOSES } from "@shared/fieldOps";
 
 type UploadRow = { rowNumber: number; fields: Record<string, unknown> };
 const dateIso = (value: unknown): string => {
@@ -22,6 +24,34 @@ const text = (value: ExcelJS.CellValue | null | undefined): string => {
 const monthNow = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit" }).format(new Date());
 
 export default function MonthlyPlanWorkspace() {
+  const user = useCurrentUser();
+  return user?.role === "employee" ? <EmployeeMonthlyPlan /> : <AdminMonthlyPlanWorkspace />;
+}
+
+function EmployeeMonthlyPlan() {
+  const user = useCurrentUser();
+  const [month, setMonth] = useState(monthNow);
+  const [plannedDate, setPlannedDate] = useState(`${month}-01`);
+  const [customerName, setCustomerName] = useState("");
+  const [location, setLocation] = useState("");
+  const [purpose, setPurpose] = useState<(typeof VISIT_PURPOSES)[number]>("Follow-up");
+  const [remarks, setRemarks] = useState("");
+  const utils = trpc.useUtils();
+  const profile = trpc.fieldOps.employees.list.useQuery({ includeInactive: false });
+  const plan = trpc.fieldOps.monthlyPlans.list.useQuery({ month, empCode: user?.empCode });
+  const holidays = trpc.fieldOps.holidays.list.useQuery({ from: `${month}-01`, to: `${month}-31` });
+  const submit = trpc.fieldOps.monthlyPlans.submit.useMutation({ onSuccess: async () => { setCustomerName(""); setLocation(""); setRemarks(""); await utils.invalidate(); toast.success("Monthly plan updated"); }, onError: error => toast.error(error.message) });
+  const addStop = (event: FormEvent) => {
+    event.preventDefault();
+    const current = plan.data?.[0]?.planItems ?? [];
+    submit.mutate({ empCode: user!.empCode, planMonth: month, items: [...current.map(row => ({ plannedDate: row.plannedDate, customerName: row.customerName, location: row.location, purpose: row.purpose, applyForTicket: row.applyForTicket, travelMode: row.travelMode, routeFrom: row.routeFrom, routeTo: row.routeTo, preferredDate: row.preferredDate, remarks: row.remarks ?? "" })), { plannedDate, customerName, location, purpose, applyForTicket: false, remarks }] });
+  };
+  const mine = profile.data?.[0];
+  const items = plan.data?.[0]?.planItems ?? [];
+  return <div className="view-stack"><div className="page-heading"><div><p className="eyebrow">WORKSPACE · PLANNING</p><h1>Monthly plan.</h1><p className="page-subtitle">Build your customer route for the month.</p></div><div className="report-icon"><CalendarDays size={20} /></div></div><div className="report-filter-card"><label className="filter-select"><span>Plan month</span><input type="month" value={month} onChange={event => { setMonth(event.target.value); setPlannedDate(`${event.target.value}-01`); }} /></label></div>{mine && <section className="panel"><div className="panel-heading"><div><p className="eyebrow">MY EMPLOYEE RECORD</p><h2>{mine.employeeName}</h2></div><span className="status-pill">{mine.empCode}</span></div><div className="report-summary-row"><div className="summary-tile"><span>DESIGNATION</span><strong>{mine.designation || "—"}</strong></div><div className="summary-tile"><span>DEPARTMENT</span><strong>{mine.department || "—"}</strong></div><div className="summary-tile"><span>CONTACT</span><strong>{mine.mobile || "—"}</strong></div></div></section>}<section className="panel"><div className="panel-heading"><div><p className="eyebrow">MONTHLY ROUTE</p><h2>{items.length} planned {items.length === 1 ? "stop" : "stops"}</h2></div></div>{items.length ? <div className="planned-items">{items.map((item, index) => <article className="planned-item" key={`${item.plannedDate}-${item.id}`}><div className="planned-item-top"><span className="item-index">{String(index + 1).padStart(2, "0")}</span><span className="item-caption">{item.plannedDate}</span></div><strong>{item.customerName}</strong><p>{item.location} · {item.purpose}</p>{item.remarks && <small>{item.remarks}</small>}</article>)}</div> : <p className="page-subtitle">No customer stops have been added for this month yet.</p>}<form className="form-grid monthly-employee-form" onSubmit={addStop}><label className="form-field"><span className="field-label">Planned date</span><input className="field-input" type="date" min={`${month}-01`} max={`${month}-31`} value={plannedDate} onChange={event => setPlannedDate(event.target.value)} required /></label><label className="form-field"><span className="field-label">Customer</span><input className="field-input" value={customerName} onChange={event => setCustomerName(event.target.value)} required /></label><label className="form-field"><span className="field-label">Location</span><input className="field-input" value={location} onChange={event => setLocation(event.target.value)} required /></label><label className="form-field"><span className="field-label">Purpose</span><select className="field-input" value={purpose} onChange={event => setPurpose(event.target.value as (typeof VISIT_PURPOSES)[number])}>{VISIT_PURPOSES.map(value => <option key={value}>{value}</option>)}</select></label><label className="form-field field-span-2"><span className="field-label">Notes</span><input className="field-input" value={remarks} onChange={event => setRemarks(event.target.value)} /></label><div className="field-span-2"><button className="button button-primary" disabled={submit.isPending}><Plus size={16} />Add planned stop</button></div></form></section><section className="panel"><div className="panel-heading"><div><p className="eyebrow">HOLIDAY CALENDAR</p><h2>Configured holidays</h2></div></div>{holidays.data?.length ? holidays.data.map(day => <div className="holiday-row" key={day.id}><CalendarDays size={15} /><strong>{day.name}</strong><span>{day.holidayDate}</span></div>) : <p className="page-subtitle">No holidays are configured for this month.</p>}</section></div>;
+}
+
+function AdminMonthlyPlanWorkspace() {
   const [month, setMonth] = useState(monthNow);
   const [empCode, setEmpCode] = useState("");
   const [rows, setRows] = useState<UploadRow[]>([]);
