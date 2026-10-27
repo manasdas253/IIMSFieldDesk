@@ -1,9 +1,9 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { empCodeSchema, employeeInputSchema, employeeSetActiveSchema, employeeUpdateSchema, followUpInputSchema, followUpListSchema, holidayInputSchema, indiaDateString, monthSchema, monthlyPlanItemInputSchema, monthlyPlanSheetQuerySchema, monthlyPlanSubmitSchema, monthlyPlanUploadValidationSchema, nextMondayDate, planInputSchema, planListFilterSchema, planUpdateSchema, visitInputSchema, visitListFilterSchema, visitUpdateSchema } from "../../shared/fieldOps";
+import { dailyVisitActionSchema, empCodeSchema, employeeInputSchema, employeeSetActiveSchema, employeeUpdateSchema, followUpInputSchema, followUpListSchema, holidayInputSchema, indiaDateString, monthSchema, monthlyPlanItemInputSchema, monthlyPlanSheetQuerySchema, monthlyPlanSubmitSchema, monthlyPlanUploadValidationSchema, nextMondayDate, planInputSchema, planListFilterSchema, planUpdateSchema, visitInputSchema, visitListFilterSchema, visitUpdateSchema } from "../../shared/fieldOps";
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import { countVisitsThrough, createPlan, createVisit, deletePlan, deleteVisit, getEmployeeNames, getPlan, getRecentVisits, getVisit, listPlans, listVisits, listVisitsThroughPage, updatePlan, updateVisit } from "../fieldOpsDb";
-import { cancelFollowUp, createEmployee, createFollowUp, createPlanHoliday, deletePlanHoliday, followUpDueSummary, listEmployeeMaster, listFollowUps, listMonthlyPlanReport, listExecutiveMonthlyTravel, listPlanHolidays, markFollowUpDone, rescheduleFollowUp, setEmployeeActive, submitMonthlyPlan, updateEmployee } from "../fieldOpsV3Db";
+import { cancelFollowUp, createEmployee, createFollowUp, createPlanHoliday, deletePlanHoliday, followUpDueSummary, getEmployeeForVisit, getFollowUp, listDailyVisitStatuses, listDailyVisitWorkload, listEmployeeDailyItems, saveDailyVisitAction, listEmployeeMaster, listFollowUps, listMonthlyPlanReport, listExecutiveMonthlyTravel, listPlanHolidays, markFollowUpDone, rescheduleFollowUp, setEmployeeActive, submitMonthlyPlan, updateEmployee } from "../fieldOpsV3Db";
 import { loadMonthlyPlanSheetData } from "../exports/monthlyPlanSheet/buildData";
 
 const dateRangeSchema = z.object({ from: z.string().optional(), to: z.string().optional(), employeeName: z.string().optional() });
@@ -151,11 +151,22 @@ export const fieldOpsRouter = router({
       const selected = input.empCode === "ALL" ? roster : roster.filter(employee => employee.empCode === input.empCode);
       return { month: input.month, employees: selected.map(employee => ({ empCode: employee.empCode, employeeName: employee.employeeName })), rowsPerEmployee: 50, purposes: ["New Lead", "Follow-up", "Service", "Collection", "Other"], travelModes: ["Own Vehicle", "Train", "Flight", "Cab", "Other"] };
     }),
-    validateUpload: adminProcedure.input(monthlyPlanUploadValidationSchema).mutation(async ({ input }) => {
-      const roster = await listEmployeeMaster(false);
+    validateUpload: protectedProcedure.input(monthlyPlanUploadValidationSchema).mutation(async ({ ctx, input }) => {
+      const roster = (await listEmployeeMaster(false)).filter(employee => ctx.user.role === "admin" || employee.empCode === ctx.user.empCode);
       const knownCodes = new Set(roster.map(employee => employee.empCode));
+      const [year, month] = input.month.split("-").map(Number);
+      const monthStart = `${input.month}-01`;
+      const monthEnd = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+      const holidays = new Set((await listPlanHolidays(monthStart, monthEnd)).map(holiday => holiday.holidayDate));
+      const requiredDates: string[] = [];
+      for (let day = 1; day <= new Date(Date.UTC(year, month, 0)).getUTCDate(); day++) {
+        const date = `${input.month}-${String(day).padStart(2, "0")}`;
+        const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+        if (weekday !== 0 && !holidays.has(date)) requiredDates.push(date);
+      }
       const errors: Array<{ rowNumber: number; field: string; message: string }> = [];
       const validRows: Array<{ rowNumber: number; empCode: string; item: z.infer<typeof monthlyPlanItemInputSchema> }> = [];
+      const coveredDates = new Map<string, Set<string>>();
       for (const row of input.rows) {
         const fields = row.fields;
         const codeResult = empCodeSchema.safeParse(fields.empCode);
@@ -163,11 +174,37 @@ export const fieldOpsRouter = router({
         const master = roster.find(employee => employee.empCode === codeResult.data)!;
         if (String(fields.employeeName ?? "").trim() !== master.employeeName) { errors.push({ rowNumber: row.rowNumber, field: "employeeName", message: "Employee Name does not match the selected Emp Code." }); continue; }
         if (String(fields.planMonth ?? "").trim() !== input.month) { errors.push({ rowNumber: row.rowNumber, field: "planMonth", message: `Plan Month must match ${input.month}.` }); continue; }
+        const plannedDate = String(fields.plannedDate ?? "").trim();
+        const isNoVisit = String(fields.customerName ?? "").trim().toLocaleLowerCase() === "no visit";
+        if (isNoVisit) {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(plannedDate) || !plannedDate.startsWith(`${input.month}-`)) {
+            errors.push({ rowNumber: row.rowNumber, field: "plannedDate", message: `Enter a valid date within ${input.month} for No Visit.` }); continue;
+          }
+          if (!requiredDates.includes(plannedDate)) {
+            errors.push({ rowNumber: row.rowNumber, field: "plannedDate", message: "No Visit can only be entered for a working day, not a Sunday or configured holiday." }); continue;
+          }
+          const covered = coveredDates.get(codeResult.data) ?? new Set<string>();
+          covered.add(plannedDate); coveredDates.set(codeResult.data, covered);
+          validRows.push({ rowNumber: row.rowNumber, empCode: codeResult.data, item: { plannedDate, customerName: "No Visit", location: "—", purpose: "Other", applyForTicket: false, travelMode: null, routeFrom: null, routeTo: null, preferredDate: null, remarks: "No Visit" } });
+          continue;
+        }
         const yes = fields.applyForTicket === true || String(fields.applyForTicket ?? "").trim().toLocaleLowerCase() === "yes";
         const item = monthlyPlanItemInputSchema.safeParse({ plannedDate: fields.plannedDate, customerName: fields.customerName, location: fields.location, purpose: fields.purpose, applyForTicket: yes, travelMode: fields.travelMode || null, routeFrom: fields.routeFrom || null, routeTo: fields.routeTo || null, preferredDate: fields.preferredDate || null, remarks: fields.remarks ?? "" });
         if (!item.success) { item.error.issues.forEach(issue => errors.push({ rowNumber: row.rowNumber, field: issue.path.join("."), message: issue.message })); continue; }
         if (!item.data.plannedDate.startsWith(`${input.month}-`)) { errors.push({ rowNumber: row.rowNumber, field: "plannedDate", message: `Date must be within ${input.month}.` }); continue; }
+        if (!requiredDates.includes(item.data.plannedDate)) { errors.push({ rowNumber: row.rowNumber, field: "plannedDate", message: "Plans can only be entered for working days, not Sundays or configured holidays." }); continue; }
+        const covered = coveredDates.get(codeResult.data) ?? new Set<string>();
+        covered.add(item.data.plannedDate); coveredDates.set(codeResult.data, covered);
         validRows.push({ rowNumber: row.rowNumber, empCode: codeResult.data, item: item.data });
+      }
+      const employeesInUpload = new Set(validRows.map(row => row.empCode));
+      for (const row of input.rows) {
+        const code = String(row.fields.empCode ?? "").trim().toUpperCase();
+        if (knownCodes.has(code)) employeesInUpload.add(code);
+      }
+      for (const empCode of employeesInUpload) {
+        const missingDates = requiredDates.filter(date => !coveredDates.get(empCode)?.has(date));
+        if (missingDates.length) errors.push({ rowNumber: 0, field: "coverage", message: `Please upload plans for all working days of the selected month. Missing dates: ${missingDates.join(", ")}.` });
       }
       const seen = new Map<string, number[]>();
       for (const row of validRows) { const key = `${row.empCode}\u0000${row.item.plannedDate}\u0000${row.item.customerName.trim().toLocaleLowerCase()}`; seen.set(key, [...(seen.get(key) ?? []), row.rowNumber]); }
@@ -178,18 +215,41 @@ export const fieldOpsRouter = router({
     list: protectedProcedure.input(z.object({ month: monthSchema, empCode: empCodeSchema.optional() })).query(({ ctx, input }) => listMonthlyPlanReport(input.month, ctx.user.role === "admin" ? input.empCode : ctx.user.empCode)),
   }),
   followUps: router({
-    create: adminProcedure.input(followUpInputSchema).mutation(async ({ input }) => {
+    create: protectedProcedure.input(followUpInputSchema).mutation(async ({ ctx, input }) => {
+      const owner = ctx.user.role === "admin" ? input.empCode : ctx.user.empCode;
+      const visit = await getEmployeeForVisit(input.visitId);
+      if (!visit || (ctx.user.role !== "admin" && visit.visit.empCode !== ctx.user.empCode)) throw new TRPCError({ code: "FORBIDDEN", message: "You can only add a follow-up to your own visit." });
       if (input.followUpDate < indiaDateString()) throw new TRPCError({ code: "BAD_REQUEST", message: "Follow-up date must be today or later." });
-      return createFollowUp(input);
+      return createFollowUp({ ...input, empCode: owner });
     }),
-    list: adminProcedure.input(followUpListSchema.optional()).query(({ input }) => listFollowUps(input ?? {})),
-    markDone: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => requireRow(await markFollowUpDone(input.id), "Follow-up")),
-    reschedule: adminProcedure.input(z.object({ id: z.number().int().positive(), followUpDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), followUpTime: z.string().optional().nullable() })).mutation(async ({ input }) => {
+    list: protectedProcedure.input(followUpListSchema.optional()).query(({ ctx, input }) => listFollowUps({ ...(input ?? {}), empCode: ctx.user.role === "admin" ? input?.empCode : ctx.user.empCode })),
+    markDone: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => { const row = await getFollowUp(input.id); if (!row) return requireRow(null, "Follow-up"); if (ctx.user.role !== "admin" && row.empCode !== ctx.user.empCode) throw new TRPCError({ code: "FORBIDDEN", message: "You can only change your own follow-ups." }); return requireRow(await markFollowUpDone(input.id), "Follow-up"); }),
+    reschedule: protectedProcedure.input(z.object({ id: z.number().int().positive(), followUpDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), followUpTime: z.string().optional().nullable() })).mutation(async ({ ctx, input }) => {
+      const row = await getFollowUp(input.id); if (!row) return requireRow(null, "Follow-up"); if (ctx.user.role !== "admin" && row.empCode !== ctx.user.empCode) throw new TRPCError({ code: "FORBIDDEN", message: "You can only change your own follow-ups." });
       if (input.followUpDate < indiaDateString()) throw new TRPCError({ code: "BAD_REQUEST", message: "Follow-up date must be today or later." });
       return requireRow(await rescheduleFollowUp(input.id, input.followUpDate, input.followUpTime), "Follow-up");
     }),
-    cancel: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => cancelFollowUp(input.id)),
-    dueSummary: adminProcedure.input(z.object({ empCode: empCodeSchema.optional() }).optional()).query(({ input }) => followUpDueSummary(input?.empCode, indiaDateString())),
+    cancel: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => { const row = await getFollowUp(input.id); if (!row) return requireRow(null, "Follow-up"); if (ctx.user.role !== "admin" && row.empCode !== ctx.user.empCode) throw new TRPCError({ code: "FORBIDDEN", message: "You can only change your own follow-ups." }); return cancelFollowUp(input.id); }),
+    dueSummary: protectedProcedure.input(z.object({ empCode: empCodeSchema.optional() }).optional()).query(({ ctx, input }) => followUpDueSummary(ctx.user.role === "admin" ? input?.empCode : ctx.user.empCode, indiaDateString())),
+  }),
+  dailyVisit: router({
+    today: protectedProcedure.input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).optional()).query(({ ctx, input }) => listEmployeeDailyItems(ctx.user.empCode, input?.date ?? indiaDateString())),
+    statusList: protectedProcedure.input(z.object({ from: z.string().optional(), to: z.string().optional(), empCode: empCodeSchema.optional() }).optional()).query(({ ctx, input }) => listDailyVisitStatuses({ ...(input ?? {}), empCode: ctx.user.role === "admin" ? input?.empCode : ctx.user.empCode })),
+    workload: protectedProcedure.input(z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })).query(({ ctx, input }) => listDailyVisitWorkload({ ...input, empCode: ctx.user.role === "admin" ? undefined : ctx.user.empCode })),
+    save: protectedProcedure.input(dailyVisitActionSchema).mutation(async ({ ctx, input }) => {
+      const today = indiaDateString(); const oldest = new Date(`${today}T00:00:00Z`); oldest.setUTCDate(oldest.getUTCDate() - 2); const oldestAllowed = oldest.toISOString().slice(0, 10);
+      if (input.visitDate > today || input.visitDate < oldestAllowed) throw new TRPCError({ code: "BAD_REQUEST", message: "Daily entries can be completed for today or the previous two days." });
+      if (input.lateEntry !== (input.visitDate < today)) throw new TRPCError({ code: "BAD_REQUEST", message: "Late-entry status must match the visit date." });
+      if (input.status === "Rescheduled") {
+        if (!input.newDate || input.newDate <= input.visitDate) throw new TRPCError({ code: "BAD_REQUEST", message: "Choose a future working day for the moved visit." });
+        const weekday = new Date(`${input.newDate}T00:00:00Z`).getUTCDay();
+        const holidays = await listPlanHolidays(input.newDate, input.newDate);
+        if (weekday === 0 || holidays.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Choose a working day that is not Sunday or a configured holiday." });
+      }
+      if (input.followUpDate && input.followUpDate < today) throw new TRPCError({ code: "BAD_REQUEST", message: "Follow-up date must be today or later." });
+      if (input.completeFollowUpId) { const open = await getFollowUp(input.completeFollowUpId); if (!open || (ctx.user.role !== "admin" && open.empCode !== ctx.user.empCode)) throw new TRPCError({ code: "FORBIDDEN", message: "You can only update your own follow-ups." }); }
+      return saveDailyVisitAction({ ...input, empCode: ctx.user.empCode, employeeName: ctx.user.employeeName });
+    }),
   }),
   holidays: router({
     list: protectedProcedure.input(z.object({ from: z.string().optional(), to: z.string().optional() }).optional()).query(({ input }) => listPlanHolidays(input?.from, input?.to)),

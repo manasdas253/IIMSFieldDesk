@@ -4,6 +4,7 @@ import { buildMonthlyPlanSheetData } from "./exports/monthlyPlanSheet/buildData"
 import { renderMonthlyPlanPdf } from "./exports/monthlyPlanSheet/renderPdf";
 import { renderMonthlyPlanXlsx } from "./exports/monthlyPlanSheet/renderXlsx";
 import { renderMonthlyPlanTemplate } from "./exports/monthlyPlanSheet/renderTemplate";
+import { currentMonthlyPlanItems } from "../shared/fieldOps";
 
 const employee = { empCode: "SAMPLE01", employeeName: "Sample Employee", designation: "Territory Manager", department: "Sales" };
 const fixture = (month: string) => buildMonthlyPlanSheetData({
@@ -36,6 +37,22 @@ describe("monthly plan sheet data builder", () => {
     expect(data.plan).toBeNull();
     expect(data.days.every(day => day.rows.length === 1 && day.rows[0].customer === "")).toBe(true);
     expect(data.totals.plannedVisits).toBe(0);
+  });
+  it("keeps monthly plan report counts identical when prior submissions are retained by version", () => {
+    const oldTableAfterReplacement = [
+      { version: 2, plannedDate: "2026-10-05", customerName: "Example Customer A", location: "Hyderabad", purpose: "New Lead", remarks: "Trial order review", applyForTicket: false },
+      { version: 2, plannedDate: "2026-10-05", customerName: "Example Customer B", location: "Krishna District", purpose: "Follow-up", remarks: "Discuss next steps", applyForTicket: true },
+    ];
+    const retainedVersionRows = [
+      { version: 1, plannedDate: "2026-10-03", customerName: "Old draft customer", location: "Pune", purpose: "Other", remarks: "Prior submission", applyForTicket: true },
+      ...oldTableAfterReplacement,
+    ];
+    const newCurrentRows = currentMonthlyPlanItems(retainedVersionRows, 2).map(({ version: _version, ...item }) => item);
+    const before = buildMonthlyPlanSheetData({ month: "2026-10", employee, plan: { version: 2, status: "Submitted", submittedAt: null }, items: oldTableAfterReplacement });
+    const after = buildMonthlyPlanSheetData({ month: "2026-10", employee, plan: { version: 2, status: "Submitted", submittedAt: null }, items: newCurrentRows });
+    expect(after.totals).toEqual(before.totals);
+    expect(after.days).toEqual(before.days);
+    expect({ plannedVisits: newCurrentRows.length, distinctCustomers: new Set(newCurrentRows.map(item => item.customerName.trim().toLocaleLowerCase("en-IN"))).size, ticketsRequested: newCurrentRows.filter(item => item.applyForTicket).length }).toEqual({ plannedVisits: oldTableAfterReplacement.length, distinctCustomers: new Set(oldTableAfterReplacement.map(item => item.customerName.trim().toLocaleLowerCase("en-IN"))).size, ticketsRequested: oldTableAfterReplacement.filter(item => item.applyForTicket).length });
   });
 });
 

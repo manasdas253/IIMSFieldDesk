@@ -29,6 +29,27 @@
       "when": 1792581194935,
       "tag": "0003_employee_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1792749755569,
+      "tag": "0004_daily_visit_flow",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1792749819562,
+      "tag": "0005_daily_status_unique_visit_day",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1792749905850,
+      "tag": "0006_preserve_monthly_plan_versions",
+      "breakpoints": true
     }
   ]
 }

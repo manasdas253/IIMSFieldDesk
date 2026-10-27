@@ -31,14 +31,23 @@ async function requireAdmin(req: Request, res: Response) {
   res.status(401).json({ error: "Authentication required." });
   return false;
 }
+async function requireSessionEmployee(req: Request, res: Response) {
+  const code = await readSession(req);
+  const employee = code ? await findActiveEmployee(code.empCode) : null;
+  if (employee && !employee.mustChangePassword && employee.passwordHash && credentialVersion(employee.passwordHash, employee.role) === code?.credentialVersion) return employee;
+  res.status(401).json({ error: "Authentication required." });
+  return null;
+}
 export function registerMonthlyPlanExportRoutes(app: Express) {
   app.get("/api/exports/monthly-plan-template.xlsx", async (req, res) => {
     try {
-      if (!await requireAdmin(req, res)) return;
+      const sessionEmployee = await requireSessionEmployee(req, res);
+      if (!sessionEmployee) return;
       const month = typeof req.query.month === "string" ? req.query.month : "";
       const empCode = typeof req.query.empCode === "string" ? req.query.empCode : "ALL";
       const validMonth = monthlyPlanSheetQuerySchema.shape.month.parse(month);
       const validCode = monthlyPlanSheetQuerySchema.shape.empCode.parse(empCode);
+      if (sessionEmployee.role !== "admin" && validCode !== sessionEmployee.empCode) { res.status(403).json({ error: "You can only download your own employee template." }); return; }
       const roster = await listEmployeeMaster(false);
       const selected = validCode === "ALL" ? roster : roster.filter(row => row.empCode === validCode);
       if (!selected.length) throw new Error("No active employee matches the selected Emp Code.");

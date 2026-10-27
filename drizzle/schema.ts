@@ -43,9 +43,37 @@ export const visits = mysqlTable("field_visits", {
   travelCost: decimal("travelCost", { precision: 12, scale: 2 }).notNull().default("0"),
   outcome: varchar("outcome", { length: 80 }).notNull(),
   notes: text("notes"),
+  /** Optional source tag; legacy rows remain NULL. */
+  source: mysqlEnum("source", ["Planned", "Unplanned"]),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, table => [index("field_visits_empCode_idx").on(table.empCode)]);
+
+/** Append-only daily answers and reschedule history. Actual visit reports continue to read field_visits. */
+export const dailyVisitStatuses = mysqlTable("daily_visit_statuses", {
+  id: int("id").autoincrement().primaryKey(),
+  empCode: varchar("empCode", { length: 20 }).notNull(),
+  employeeName: varchar("employeeName", { length: 120 }).notNull(),
+  visitDate: date("visitDate", { mode: "string" }).notNull(),
+  originalPlannedDate: date("originalPlannedDate", { mode: "string" }),
+  // Kept as a historical reference without FK cascade: monthly plan replacement must not erase daily history.
+  plannedVisitId: int("plannedVisitId"),
+  parentStatusId: int("parentStatusId"),
+  customerName: varchar("customerName", { length: 180 }).notNull(),
+  location: varchar("location", { length: 160 }).notNull(),
+  purpose: mysqlEnum("purpose", VISIT_PURPOSES).notNull(),
+  source: mysqlEnum("source", ["Planned", "Unplanned"]).notNull().default("Planned"),
+  status: mysqlEnum("status", ["Planned", "Visited", "Missed", "Rescheduled"]).notNull(),
+  reason: mysqlEnum("reason", ["Customer unavailable", "Rescheduled", "Internal work", "Leave", "Other"]),
+  outcome: varchar("outcome", { length: 80 }),
+  notes: text("notes"),
+  newDate: date("newDate", { mode: "string" }),
+  visitId: int("visitId"),
+  followUpId: int("followUpId"),
+  lateEntry: boolean("lateEntry").notNull().default(false),
+  mergedIntoStatusId: int("mergedIntoStatusId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [uniqueIndex("daily_status_visit_day_uq").on(table.empCode, table.plannedVisitId, table.visitDate), index("daily_status_emp_date_idx").on(table.empCode, table.visitDate), index("daily_status_planned_visit_idx").on(table.plannedVisitId), index("daily_status_parent_idx").on(table.parentStatusId)]);
 
 export const weeklyPlans = mysqlTable("weekly_plans", {
   id: int("id").autoincrement().primaryKey(),
@@ -85,6 +113,7 @@ export const monthlyPlans = mysqlTable("monthly_plans", {
 export const monthlyPlanItems = mysqlTable("monthly_plan_items", {
   id: int("id").autoincrement().primaryKey(),
   planId: int("planId").notNull().references(() => monthlyPlans.id, { onDelete: "cascade" }),
+  version: int("version").notNull().default(1),
   plannedDate: date("plannedDate", { mode: "string" }).notNull(),
   customerName: varchar("customerName", { length: 180 }).notNull(),
   location: varchar("location", { length: 160 }).notNull(),
@@ -105,6 +134,7 @@ export const followUps = mysqlTable("follow_ups", {
   customerName: varchar("customerName", { length: 180 }).notNull(),
   followUpDate: date("followUpDate", { mode: "string" }).notNull(),
   followUpTime: varchar("followUpTime", { length: 8 }),
+  followUpPurpose: varchar("followUpPurpose", { length: 500 }),
   note: text("note"),
   status: mysqlEnum("status", ["Pending", "Done", "Rescheduled", "Cancelled"]).notNull().default("Pending"),
   completedAt: timestamp("completedAt"),

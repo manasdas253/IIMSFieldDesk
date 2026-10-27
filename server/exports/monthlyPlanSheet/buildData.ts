@@ -1,6 +1,6 @@
 import { and, eq, gte, lte } from "drizzle-orm";
 import { employees, followUps, monthlyPlanItems, monthlyPlans, planHolidays, visits } from "../../../drizzle/schema";
-import { monthlyPlanSheetDataSchema, type MonthlyPlanSheetData } from "../../../shared/fieldOps";
+import { currentMonthlyPlanItems, monthlyPlanSheetDataSchema, type MonthlyPlanSheetData } from "../../../shared/fieldOps";
 import { getDb } from "../../db";
 
 export type SheetEmployee = { empCode: string; employeeName: string; designation: string | null; department: string | null };
@@ -84,7 +84,8 @@ export async function loadMonthlyPlanSheetData(month: string, empCode: string | 
   const holidays = await db.select().from(planHolidays).where(and(gte(planHolidays.holidayDate, monthStart), lte(planHolidays.holidayDate, monthEnd)));
   const built = await Promise.all(roster.map(async employee => {
     const [planHeader] = options.blank ? [] : await db.select().from(monthlyPlans).where(and(eq(monthlyPlans.empCode, employee.empCode), eq(monthlyPlans.planMonth, month))).limit(1);
-    const planItems = planHeader ? await db.select().from(monthlyPlanItems).where(eq(monthlyPlanItems.planId, planHeader.id)).orderBy(monthlyPlanItems.plannedDate, monthlyPlanItems.id) : [];
+    const allPlanItems = planHeader ? await db.select().from(monthlyPlanItems).where(eq(monthlyPlanItems.planId, planHeader.id)).orderBy(monthlyPlanItems.plannedDate, monthlyPlanItems.id) : [];
+    const planItems = planHeader ? currentMonthlyPlanItems(allPlanItems, planHeader.version) : [];
     const actualRows = options.visited ? await db.select({ empCode: visits.empCode, customerName: visits.customerName, visitDate: visits.visitDate }).from(visits).where(and(eq(visits.empCode, employee.empCode), gte(visits.visitDate, monthStart), lte(visits.visitDate, monthEnd))) : [];
     return buildMonthlyPlanSheetData({ month, employee, plan: planHeader ? { version: planHeader.version, status: planHeader.status, submittedAt: planHeader.submittedAt } : null, items: planItems, holidays, actualVisits: actualRows, visited: options.visited });
   }));

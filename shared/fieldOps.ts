@@ -150,9 +150,33 @@ export const followUpInputSchema = z.object({
   customerName: requiredText("Customer name"),
   followUpDate: dateOnly,
   followUpTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Enter a valid time.").optional().nullable(),
+  followUpPurpose: z.string().trim().max(500).optional().default(""),
   note: z.string().max(4000).optional().default(""),
 });
 export const followUpListSchema = z.object({ empCode: empCodeSchema.optional(), status: z.enum(["Pending", "Done", "Rescheduled", "Cancelled"]).optional(), from: dateOnly.optional(), to: dateOnly.optional() });
+
+export const dailyVisitActionSchema = z.object({
+  visitDate: dateOnly,
+  plannedVisitId: z.number().int().positive().nullable().optional(),
+  mergeIntoPlannedVisitId: z.number().int().positive().nullable().optional(),
+  parentStatusId: z.number().int().positive().nullable().optional(),
+  originalPlannedDate: dateOnly.nullable().optional(),
+  customerName: requiredText("Customer name"), location: requiredText("Location", 160), purpose: z.enum(VISIT_PURPOSES),
+  source: z.enum(["Planned", "Unplanned"]).default("Planned"),
+  status: z.enum(["Visited", "Missed", "Rescheduled"]),
+  reason: z.enum(["Customer unavailable", "Rescheduled", "Internal work", "Leave", "Other"]).nullable().optional(),
+  newDate: dateOnly.nullable().optional(), outcome: z.string().trim().max(80).optional().default(""), notes: z.string().max(4000).optional().default(""),
+  followUpDate: dateOnly.nullable().optional(), followUpTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(), followUpPurpose: z.string().max(500).optional().default(""),
+  completeFollowUpId: z.number().int().positive().nullable().optional(),
+  lateEntry: z.boolean().default(false),
+}).superRefine((item, ctx) => {
+  if (item.source === "Planned" && !item.plannedVisitId) ctx.addIssue({ code: "custom", path: ["plannedVisitId"], message: "Link this response to a planned visit." });
+  if (item.source === "Unplanned" && item.plannedVisitId) ctx.addIssue({ code: "custom", path: ["plannedVisitId"], message: "An unplanned visit cannot link to a plan item." });
+  if (item.status === "Visited" && !item.outcome.trim()) ctx.addIssue({ code: "custom", path: ["outcome"], message: "Add a visit outcome." });
+  if (item.status === "Missed" && !item.reason) ctx.addIssue({ code: "custom", path: ["reason"], message: "Choose a reason for the missed visit." });
+  if (item.status === "Rescheduled" && (!item.newDate || item.reason !== "Rescheduled")) ctx.addIssue({ code: "custom", path: ["newDate"], message: "Choose a new date for the rescheduled visit." });
+  if (item.followUpDate && !item.followUpPurpose?.trim()) ctx.addIssue({ code: "custom", path: ["followUpPurpose"], message: "Add the follow-up purpose." });
+});
 
 export const monthlyPlanSheetDataSchema = z.object({
   month: monthSchema,
@@ -172,6 +196,10 @@ export const monthlyPlanSheetDataSchema = z.object({
 export type EmpCode = z.infer<typeof empCodeSchema>;
 export type EmployeeInput = z.infer<typeof employeeInputSchema>;
 export type MonthlyPlanItemInput = z.infer<typeof monthlyPlanItemInputSchema>;
+/** Select the same current submitted version that the pre-versioned monthly-plan table represented. */
+export function currentMonthlyPlanItems<T extends { version: number }>(items: T[], version: number): T[] {
+  return items.filter(item => item.version === version);
+}
 export type MonthlyPlanSubmitInput = z.infer<typeof monthlyPlanSubmitSchema>;
 export type MonthlyPlanSheetData = z.infer<typeof monthlyPlanSheetDataSchema>;
 export type FollowUpInput = z.infer<typeof followUpInputSchema>;

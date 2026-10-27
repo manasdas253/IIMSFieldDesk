@@ -10,11 +10,12 @@ import EmployeesView from "@/components/field-ops/EmployeesView";
 import MonthlyPlanWorkspace from "@/components/field-ops/MonthlyPlanWorkspace";
 import FollowUpsView from "@/components/field-ops/FollowUpsView";
 import ExecutiveTravelSummaryView from "@/components/field-ops/ExecutiveTravelSummary";
+import DailyStatusView from "@/components/field-ops/DailyStatusView";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/contexts/CurrentUserContext";
 import { UserMenu } from "@/components/AuthGate";
 
-type View = "overview" | "log" | "plan" | "monthlyPlan" | "followUps" | "today" | "employee" | "cost" | "compare" | "upcoming" | "weeklyVisits" | "allVisits" | "monthlyReport" | "executiveTravel" | "employees";
+type View = "overview" | "log" | "plan" | "monthlyPlan" | "followUps" | "dailyStatus" | "today" | "employee" | "cost" | "compare" | "upcoming" | "weeklyVisits" | "allVisits" | "monthlyReport" | "executiveTravel" | "employees";
 const navigation: Array<{ id: View; label: string; shortLabel: string; icon: typeof LayoutDashboard; group: "workspace" | "insights" }> = [
   { id: "overview", label: "Overview", shortLabel: "Home", icon: LayoutDashboard, group: "workspace" },
   { id: "log", label: "Log a visit", shortLabel: "Log", icon: Plus, group: "workspace" },
@@ -22,6 +23,7 @@ const navigation: Array<{ id: View; label: string; shortLabel: string; icon: typ
   { id: "monthlyPlan", label: "Monthly plan", shortLabel: "Month plan", icon: FileSpreadsheet, group: "workspace" },
   { id: "employees", label: "Employee directory", shortLabel: "Team", icon: Users, group: "workspace" },
   { id: "followUps", label: "Follow-ups", shortLabel: "Follow-ups", icon: CalendarClock, group: "insights" },
+  { id: "dailyStatus", label: "Daily visit status", shortLabel: "Daily status", icon: ClipboardCheck, group: "insights" },
   { id: "monthlyReport", label: "Monthly plan report", shortLabel: "Month", icon: FileSpreadsheet, group: "insights" },
   { id: "executiveTravel", label: "Executive Travel Summary", shortLabel: "Exec travel", icon: Route, group: "insights" },
   { id: "today", label: "Today’s visits", shortLabel: "Visits", icon: MapPinned, group: "insights" },
@@ -73,7 +75,7 @@ function NavButton({ item, active, setView }: { item: (typeof navigation)[number
 export default function Home() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
-  const employeeViews: View[] = ["log", "plan", "monthlyPlan"];
+  const employeeViews: View[] = ["log", "plan", "monthlyPlan", "followUps", "dailyStatus"];
   const allowedNavigation = isAdmin ? navigation : navigation.filter(item => employeeViews.includes(item.id));
   const [view, setView] = useState<View>(isAdmin ? "overview" : "log");
   const setAllowedView = (next: View) => setView(isAdmin || employeeViews.includes(next) ? next : "log");
@@ -81,8 +83,8 @@ export default function Home() {
   const [reminderEmpCode] = useState(() => typeof window === "undefined" ? "" : localStorage.getItem("fielddesk:lastEmpCode") ?? "");
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   const next3 = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() + 3 * 86400000));
-  const dueReminders = trpc.fieldOps.followUps.dueSummary.useQuery({}, { refetchInterval: 60_000, enabled: isAdmin });
-  const upcomingReminders = trpc.fieldOps.followUps.list.useQuery({ status: "Pending", from: today, to: next3 }, { refetchInterval: 60_000, enabled: isAdmin });
+  const dueReminders = trpc.fieldOps.followUps.dueSummary.useQuery({}, { refetchInterval: 60_000 });
+  const upcomingReminders = trpc.fieldOps.followUps.list.useQuery({ status: "Pending", from: today, to: next3 }, { refetchInterval: 60_000 });
   useEffect(() => { if (!isAdmin && !employeeViews.includes(view)) setView("log"); }, [isAdmin, view]);
   useEffect(() => { const openLog = () => setView("log"); window.addEventListener("fielddesk:open-followup-log", openLog); return () => window.removeEventListener("fielddesk:open-followup-log", openLog); }, []);
   useEffect(() => {
@@ -94,7 +96,7 @@ export default function Home() {
     toast(`You have ${dueReminders.data.length} follow-up${dueReminders.data.length === 1 ? "" : "s"} due`, { description: overdue ? `${overdue} overdue · open the follow-up queue to review.` : "Due today · open the follow-up queue to review.", action: { label: "Open", onClick: () => setView("followUps") } });
   }, [dueReminders.data, today, reminderEmpCode]);
   const active = allowedNavigation.find(item => item.id === view);
-  const selectedView = view === "followUps" ? <FollowUpsView /> : view === "monthlyPlan" ? <MonthlyPlanWorkspace /> : view === "employees" ? <EmployeesView /> : view === "executiveTravel" ? <ExecutiveTravelSummaryView /> : view === "monthlyReport" ? <MonthlyPlanReportView /> : view === "weeklyVisits" ? <WeeklyVisitsView /> : view === "allVisits" ? <TotalVisitsToDateView onBack={() => setView("overview")} /> : view === "log" || view === "plan" ? <VisitForms key={view} initialSection={view === "plan" ? "plan" : "visit"} /> : view === "today" ? <TodayVisitsView /> : view === "employee" ? <EmployeeReportView /> : view === "cost" ? <CostSummaryView /> : view === "compare" ? <PlanVsActualView /> : view === "upcoming" ? <UpcomingPlanView /> : <OverviewView onViewWeeklyPlan={() => setView("upcoming")} onViewAllVisits={() => setView("allVisits")} onViewFollowUps={() => setView("followUps")} />;
+  const selectedView = view === "dailyStatus" ? <DailyStatusView /> : view === "followUps" ? <FollowUpsView /> : view === "monthlyPlan" ? <MonthlyPlanWorkspace /> : view === "employees" ? <EmployeesView /> : view === "executiveTravel" ? <ExecutiveTravelSummaryView /> : view === "monthlyReport" ? <MonthlyPlanReportView /> : view === "weeklyVisits" ? <WeeklyVisitsView /> : view === "allVisits" ? <TotalVisitsToDateView onBack={() => setView("overview")} /> : view === "log" || view === "plan" ? <VisitForms key={view} initialSection={view === "plan" ? "plan" : "visit"} /> : view === "today" ? <TodayVisitsView /> : view === "employee" ? <EmployeeReportView /> : view === "cost" ? <CostSummaryView /> : view === "compare" ? <PlanVsActualView /> : view === "upcoming" ? <UpcomingPlanView /> : <OverviewView onViewWeeklyPlan={() => setView("upcoming")} onViewAllVisits={() => setView("allVisits")} onViewFollowUps={() => setView("followUps")} />;
   const displayDate = new Intl.DateTimeFormat("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata" }).format(new Date());
 
   return <div className={`app-frame${isAdmin ? "" : " employee-shell"}`}><Sidebar view={view} setView={setAllowedView} items={allowedNavigation} /><div className="main-area"><header className="topbar"><div className="mobile-brand"><BrandMark /><strong>FIELD<span>DESK</span></strong><img className="mobile-iims-logo" src="/brand/cka-iims-wordmark.png" alt="CKA Birla Group and IIMS logos" width={641} height={149} /></div><div className="topbar-context"><span className="topbar-dot" /><span>CKA Birla Group <b>/</b> IIMS</span><span className="topbar-separator">·</span><span className="topbar-page">{active?.label ?? "Overview"}</span></div><div className="topbar-right"><div className="top-date"><Activity size={15} /><span>{displayDate}</span></div><div className="reminder-bell-wrap"><button type="button" className="reminder-bell" aria-label={`${dueReminders.data?.length ?? 0} follow-ups due`} aria-expanded={remindersOpen} onClick={() => setRemindersOpen(value => !value)}><Bell size={17} />{Boolean(dueReminders.data?.length) && <span>{dueReminders.data?.length}</span>}</button>{remindersOpen && <div className="reminder-panel"><div className="reminder-panel-head"><strong>Follow-up reminders</strong><span>{dueReminders.data?.length ?? 0} due now</span></div>{[...[{ label: "Overdue", rows: (dueReminders.data ?? []).filter(item => item.followUpDate < today) }, { label: "Today", rows: (dueReminders.data ?? []).filter(item => item.followUpDate === today) }, { label: "Next 3 days", rows: (upcomingReminders.data ?? []).filter(item => item.followUpDate > today) }]].map(group => group.rows.length > 0 && <div className="reminder-group" key={group.label}><b>{group.label}</b>{group.rows.slice(0, 3).map(item => <button key={item.id} type="button" onClick={() => { setRemindersOpen(false); setView("followUps"); }}><span>{item.customerName}</span><small>{item.empCode ?? "Unmapped"} · {item.followUpDate}</small></button>)}</div>)}<button type="button" className="reminder-open-all" onClick={() => { setRemindersOpen(false); setView("followUps"); }}>Open follow-up queue</button></div>}</div><button type="button" className="button button-primary top-cta" onClick={() => setAllowedView("log")}><Plus size={17} />Log a visit</button><UserMenu /></div></header><main className="main-content">{selectedView}</main><footer className="mobile-footer"><div className="mobile-nav">{allowedNavigation.map(item => { const Icon = item.icon; return <button key={item.id} type="button" className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}><Icon size={18} /><span>{item.shortLabel}</span></button>; })}</div></footer></div></div>;

@@ -1,0 +1,1 @@
+ALTER TABLE `daily_visit_statuses` ADD CONSTRAINT `daily_status_visit_day_uq` UNIQUE(`empCode`,`plannedVisitId`,`visitDate`);
