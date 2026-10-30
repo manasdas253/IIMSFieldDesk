@@ -20,6 +20,18 @@ const text = (value: ExcelJS.CellValue | null | undefined): string => {
   if (value && typeof value === "object" && "text" in value) return String((value as { text?: string }).text ?? "");
   return value === null || value === undefined ? "" : String(value);
 };
+const readPlanFields = (sheet: ExcelJS.Worksheet, row: ExcelJS.Row, selectedMonth: string) => {
+  const headers = new Map<string, number>();
+  sheet.getRow(5).eachCell((cell, column) => headers.set(text(cell.value).trim(), column));
+  const get = (name: string, legacyColumn: number) => row.getCell(headers.get(name) ?? legacyColumn).value;
+  return {
+    empCode: text(get("Emp Code", 1)).trim().toUpperCase(), employeeName: text(get("Employee Name", 2)).trim(), planMonth: headers.has("Plan Month") ? text(get("Plan Month", 3)).trim() : selectedMonth,
+    plannedDate: dateIso(get(headers.has("Plan Date") ? "Plan Date" : "Planned Date", headers.has("Plan Date") ? 3 : 4)),
+    customerName: text(get("Customer Name", 5)).trim(), location: text(get("Location / City", 6)).trim(),
+    purpose: text(get("Purpose", 7)).trim(), applyForTicket: text(get("Apply for Ticket", 8)).trim(), travelMode: text(get("Travel Mode", 9)).trim(),
+    routeFrom: text(get("From", 10)).trim(), routeTo: text(get("To", 11)).trim(), preferredDate: dateIso(get("Preferred Travel Date", 12)), remarks: text(get("Remarks", 13)).trim(),
+  };
+};
 const monthNow = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit" }).format(new Date());
 
 export default function MonthlyPlanWorkspace() {
@@ -56,14 +68,16 @@ function EmployeeMonthlyPlan() {
       const parsed: UploadRow[] = [];
       workbook.worksheets.forEach(sheet => {
         if (text(sheet.getCell("A5").value) !== "Emp Code") return;
+        const sheetStart = parsed.length;
         for (let rowNumber = 6; rowNumber <= sheet.rowCount; rowNumber++) {
           const row = sheet.getRow(rowNumber);
-          const fields = { empCode: text(row.getCell(1).value).trim().toUpperCase(), employeeName: text(row.getCell(2).value).trim(), planMonth: text(row.getCell(3).value).trim(), plannedDate: dateIso(row.getCell(4).value), customerName: text(row.getCell(5).value).trim(), location: text(row.getCell(6).value).trim(), purpose: text(row.getCell(7).value).trim(), applyForTicket: text(row.getCell(8).value).trim(), travelMode: text(row.getCell(9).value).trim(), routeFrom: text(row.getCell(10).value).trim(), routeTo: text(row.getCell(11).value).trim(), preferredDate: dateIso(row.getCell(12).value), remarks: text(row.getCell(13).value).trim() };
+          const fields = readPlanFields(sheet, row, month);
           const hasData = [fields.plannedDate, fields.customerName, fields.location, fields.purpose, fields.travelMode, fields.routeFrom, fields.routeTo, fields.preferredDate, fields.remarks].some(Boolean) || fields.applyForTicket.toLowerCase() === "yes";
           if (hasData) parsed.push({ rowNumber, fields });
         }
+        if (parsed.length === sheetStart) parsed.push({ rowNumber: 6, fields: { ...readPlanFields(sheet, sheet.getRow(6), month), coverageOnly: true } });
       });
-      if (!parsed.length) throw new Error("No filled plan rows were found. Use your FieldDesk monthly template.");
+      if (!parsed.length) throw new Error("No employee worksheets were found. Use the FieldDesk monthly template.");
       setRows(parsed); toast.success(`${parsed.length} filled row${parsed.length === 1 ? "" : "s"} read from ${file.name}`);
     } catch (error) { toast.error(error instanceof Error ? error.message : "Couldn?t read this workbook."); }
   };
@@ -78,7 +92,7 @@ function EmployeeMonthlyPlan() {
   };
   return <div className="view-stack monthly-plan-workspace"><div className="page-heading"><div><p className="eyebrow">WORKSPACE ? MONTHLY PLANNING</p><h1>My monthly plan.</h1><p className="page-subtitle">Download your Excel template, fill in your planned visits, then upload it for validation.</p></div><div className="report-icon"><FileSpreadsheet size={20} /></div></div>
     <section className="panel"><div className="panel-heading"><div><p className="eyebrow">STEP 1 ? YOUR TEMPLATE</p><h2>Choose the planning month</h2></div></div><div className="plan-sheet-controls"><label className="filter-select"><span>Plan month</span><input type="month" value={month} onChange={event => { setMonth(event.target.value); setRows([]); validateUpload.reset(); }} /></label></div><div className="plan-sheet-downloads"><button className="button button-primary" disabled={!user?.empCode || busyDownload} onClick={() => void downloadTemplate()}><Download size={16} />{busyDownload ? "Preparing?" : "Download my Excel template"}</button></div><p className="page-subtitle">This workbook contains only your employee details. Keep them unchanged while filling your planned visits.</p></section>
-    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">STEP 2 ? YOUR UPLOAD</p><h2>Upload your completed workbook</h2></div><span className="panel-chip"><Upload size={14} /> XLSX</span></div><label className="upload-drop"><Upload size={20} /><span><strong>{fileName || "Choose your completed FieldDesk template"}</strong><small>Only .xlsx files ? only your employee code will be accepted</small></span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => { const file = event.target.files?.[0]; if (file) void readWorkbook(file); event.currentTarget.value = ""; }} /></label><p className="page-subtitle">Fill one row for every working day. For a day without a visit, enter “No Visit” in the Customer Name column.</p>{rows.length > 0 && <div className="plan-sheet-downloads"><button className="button button-secondary" disabled={validateUpload.isPending} onClick={() => void checkRows()}>{validateUpload.isPending ? "Validating?" : "Validate my rows"}</button><span className="panel-count">{rows.length} rows found</span></div>}
+    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">STEP 2 ? YOUR UPLOAD</p><h2>Upload your completed workbook</h2></div><span className="panel-chip"><Upload size={14} /> XLSX</span></div><label className="upload-drop"><Upload size={20} /><span><strong>{fileName || "Choose your completed FieldDesk template"}</strong><small>Only .xlsx files ? only your employee code will be accepted</small></span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => { const file = event.target.files?.[0]; if (file) void readWorkbook(file); event.currentTarget.value = ""; }} /></label><p className="page-subtitle">Fill one row for every working day. Enter a customer visit, “No Visit”, “Office”, or “Leave”; Sundays and company holidays are excluded.</p>{rows.length > 0 && <div className="plan-sheet-downloads"><button className="button button-secondary" disabled={validateUpload.isPending} onClick={() => void checkRows()}>{validateUpload.isPending ? "Validating?" : "Validate my rows"}</button><span className="panel-count">{rows.length} rows found</span></div>}
       {validation && <div className="upload-validation"><div className={`upload-validation-summary ${validation.errors.length ? "has-errors" : "all-valid"}`}><strong>{validation.validCount} valid of {validation.totalRows} rows</strong><span>{validation.errors.length ? `${validation.errors.length} issue${validation.errors.length === 1 ? "" : "s"} need correction.` : "All rows are ready to submit."}</span></div>{validation.errors.length > 0 && <div className="upload-row-errors"><h3><AlertTriangle size={15} /> Fix the highlighted workbook rows and validate again</h3>{validation.errors.map((error, index) => <p key={`${error.rowNumber}-${error.field}-${index}`}>{error.rowNumber > 0 && <b>Row {error.rowNumber} ? {error.field} </b>}{error.message}</p>)}</div>}{validation.validRows.length > 0 && <div className="table-scroll"><table className="data-table"><thead><tr><th>Row</th><th>Planned date</th><th>Customer</th><th>Location</th><th>Purpose</th><th>Ticket</th></tr></thead><tbody>{validation.validRows.slice(0, 20).map(row => <tr key={`${row.rowNumber}-${row.empCode}`}><td>{row.rowNumber}</td><td>{row.item.plannedDate}</td><td>{row.item.customerName}</td><td>{row.item.location}</td><td>{row.item.purpose}</td><td>{row.item.applyForTicket ? "Yes" : "No"}</td></tr>)}</tbody></table></div>}{validation.errors.length === 0 && validation.validRows.length > 0 && <div className="plan-sheet-downloads"><button className="button button-primary" disabled={submitting} onClick={() => void submitValid()}>{submitting ? "Submitting?" : `Submit ${validation.validCount} row${validation.validCount === 1 ? "" : "s"}`}</button></div>}</div>}
     </section></div>;
 }
@@ -115,28 +129,16 @@ function AdminMonthlyPlanWorkspace() {
       const parsed: UploadRow[] = [];
       workbook.worksheets.forEach(sheet => {
         if (text(sheet.getCell("A5").value) !== "Emp Code") return;
+        const sheetStart = parsed.length;
         for (let rowNumber = 6; rowNumber <= sheet.rowCount; rowNumber++) {
           const row = sheet.getRow(rowNumber);
-          const fields = {
-            empCode: text(row.getCell(1).value).trim().toUpperCase(),
-            employeeName: text(row.getCell(2).value).trim(),
-            planMonth: text(row.getCell(3).value).trim(),
-            plannedDate: dateIso(row.getCell(4).value),
-            customerName: text(row.getCell(5).value).trim(),
-            location: text(row.getCell(6).value).trim(),
-            purpose: text(row.getCell(7).value).trim(),
-            applyForTicket: text(row.getCell(8).value).trim(),
-            travelMode: text(row.getCell(9).value).trim(),
-            routeFrom: text(row.getCell(10).value).trim(),
-            routeTo: text(row.getCell(11).value).trim(),
-            preferredDate: dateIso(row.getCell(12).value),
-            remarks: text(row.getCell(13).value).trim(),
-          };
+          const fields = readPlanFields(sheet, row, month);
           const hasUserData = [fields.plannedDate, fields.customerName, fields.location, fields.purpose, fields.travelMode, fields.routeFrom, fields.routeTo, fields.preferredDate, fields.remarks].some(Boolean) || String(fields.applyForTicket).toLowerCase() === "yes";
           if (hasUserData) parsed.push({ rowNumber, fields });
         }
+        if (parsed.length === sheetStart) parsed.push({ rowNumber: 6, fields: { ...readPlanFields(sheet, sheet.getRow(6), month), coverageOnly: true } });
       });
-      if (!parsed.length) throw new Error("No filled plan rows were found. Use the FieldDesk monthly input template.");
+      if (!parsed.length) throw new Error("No employee worksheets were found. Use the FieldDesk monthly input template.");
       setRows(parsed);
       toast.success(`${parsed.length} filled row${parsed.length === 1 ? "" : "s"} read from ${file.name}`);
     } catch (error) { toast.error(error instanceof Error ? error.message : "Couldn’t read this workbook."); }

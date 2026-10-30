@@ -79,7 +79,8 @@ export async function listMonthlyPlanReport(month: string, empCode?: string) {
   return roster.map(employee => {
     const plan = planByCode.get(employee.empCode);
     const planItems = plan ? itemsByPlan.get(plan.id) ?? [] : [];
-    return { empCode: employee.empCode, name: employee.employeeName, month, status: plan?.status ?? "Not submitted", version: plan?.version ?? 0, plannedVisits: planItems.length, distinctCustomers: new Set(planItems.map(item => item.customerName.trim().toLocaleLowerCase("en-IN"))).size, ticketsRequested: planItems.filter(item => item.applyForTicket).length, planItems, plan };
+    const visitItems = planItems.filter(item => !["no visit", "office", "leave"].includes(item.customerName.trim().toLocaleLowerCase("en-IN")));
+    return { empCode: employee.empCode, name: employee.employeeName, month, status: plan?.status ?? "Not submitted", version: plan?.version ?? 0, plannedVisits: visitItems.length, distinctCustomers: new Set(visitItems.map(item => item.customerName.trim().toLocaleLowerCase("en-IN"))).size, ticketsRequested: planItems.filter(item => item.applyForTicket).length, planItems, plan };
   });
 }
 
@@ -88,16 +89,27 @@ export async function listExecutiveMonthlyTravel(month: string) {
   const db = await getDb(); if (!db) throw new Error("Database is not available");
   const plans = await db.select().from(monthlyPlans).where(and(eq(monthlyPlans.planMonth, month), eq(monthlyPlans.status, "Submitted")));
   const planIds = plans.map(plan => plan.id);
-  if (!planIds.length) return [];
   const [items, roster] = await Promise.all([
-    db.select().from(monthlyPlanItems).where(inArray(monthlyPlanItems.planId, planIds)).orderBy(asc(monthlyPlanItems.plannedDate), asc(monthlyPlanItems.id)),
+    planIds.length ? db.select().from(monthlyPlanItems).where(inArray(monthlyPlanItems.planId, planIds)).orderBy(asc(monthlyPlanItems.plannedDate), asc(monthlyPlanItems.id)) : Promise.resolve([]),
     db.select().from(employees),
   ]);
   const employeeByCode = new Map(roster.map(employee => [employee.empCode, employee]));
-  return plans.flatMap(plan => currentMonthlyPlanItems(items.filter(item => item.planId === plan.id), plan.version).map(item => {
+  const plannedRows = plans.flatMap(plan => currentMonthlyPlanItems(items.filter(item => item.planId === plan.id), plan.version)
+    .filter(item => !["no visit", "office", "leave"].includes(item.customerName.trim().toLocaleLowerCase("en-IN")))
+    .map(item => {
     const employee = employeeByCode.get(plan.empCode);
     return { id: item.id, plannedDate: item.plannedDate, empCode: plan.empCode, employeeName: plan.employeeName, department: employee?.department ?? "", customerName: item.customerName, location: item.location, purpose: item.purpose, remarks: item.remarks ?? "", planMonth: month, version: plan.version, submittedAt: plan.submittedAt };
   }));
+  const monthStart = `${month}-01`;
+  const monthEnd = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10);
+  const movedRows = await db.select().from(dailyVisitStatuses).where(and(gte(dailyVisitStatuses.visitDate, monthStart), lte(dailyVisitStatuses.visitDate, monthEnd), eq(dailyVisitStatuses.status, "Planned"), isNotNull(dailyVisitStatuses.parentStatusId)));
+  const planByItemId = new Map(items.map(item => [item.id, plans.find(plan => plan.id === item.planId)]));
+  const rescheduledRows = movedRows.map(row => {
+    const plan = row.plannedVisitId ? planByItemId.get(row.plannedVisitId) : undefined;
+    const employee = employeeByCode.get(row.empCode);
+    return { id: `rescheduled-${row.id}`, plannedDate: row.visitDate, empCode: row.empCode, employeeName: row.employeeName, department: employee?.department ?? "", customerName: row.customerName, location: row.location, purpose: row.purpose, remarks: row.notes ?? "Rescheduled visit", planMonth: month, version: plan?.version ?? 0, submittedAt: plan?.submittedAt ?? null, travelStatus: "Rescheduled" as const };
+  });
+  return [...plannedRows, ...rescheduledRows].sort((a, b) => a.plannedDate.localeCompare(b.plannedDate) || a.employeeName.localeCompare(b.employeeName));
 }
 export async function listPlanHolidays(from?: string, to?: string) {
   const db = await getDb(); if (!db) throw new Error("Database is not available");
@@ -163,7 +175,10 @@ export async function listEmployeeDailyItems(empCode: string, date: string) {
   const planRows = await db.select({ plan: monthlyPlans, item: monthlyPlanItems }).from(monthlyPlans).innerJoin(monthlyPlanItems, eq(monthlyPlans.id, monthlyPlanItems.planId)).where(and(eq(monthlyPlans.empCode, empCode), eq(monthlyPlans.planMonth, month), eq(monthlyPlans.status, "Submitted"), eq(monthlyPlanItems.plannedDate, date)));
   const moved = await db.select().from(dailyVisitStatuses).where(and(eq(dailyVisitStatuses.empCode, empCode), eq(dailyVisitStatuses.visitDate, date), isNotNull(dailyVisitStatuses.parentStatusId), eq(dailyVisitStatuses.source, "Planned")));
   const dayStatuses = await db.select().from(dailyVisitStatuses).where(and(eq(dailyVisitStatuses.empCode, empCode), eq(dailyVisitStatuses.visitDate, date)));
-  const currentRows = planRows.filter(({ plan, item }) => currentMonthlyPlanItems([item], plan.version).length > 0);
+  const currentRows = planRows.filter(({ plan, item }) =>
+    !["no visit", "office", "leave"].includes(item.customerName.trim().toLocaleLowerCase("en-IN")) &&
+    currentMonthlyPlanItems([item], plan.version).length > 0,
+  );
   const itemIds = currentRows.map(({ item }) => item.id);
   const history = itemIds.length ? await db.select().from(dailyVisitStatuses).where(and(eq(dailyVisitStatuses.empCode, empCode), inArray(dailyVisitStatuses.plannedVisitId, itemIds))) : [];
   const movedForCurrent = new Map(moved.filter(row => row.plannedVisitId !== null).map(row => [row.plannedVisitId!, row]));
@@ -209,7 +224,7 @@ export async function saveDailyVisitAction(input: DailyVisitAction & { empCode: 
       const existingMerged = input.mergeIntoPlannedVisitId ? (await tx.select().from(dailyVisitStatuses).where(and(eq(dailyVisitStatuses.empCode, input.empCode), eq(dailyVisitStatuses.plannedVisitId, input.mergeIntoPlannedVisitId), eq(dailyVisitStatuses.visitDate, input.visitDate), eq(dailyVisitStatuses.status, "Visited"))).limit(1))[0] : undefined;
       if (existingMerged?.visitId) visitId = existingMerged.visitId;
       else {
-        const [createdVisit] = await tx.insert(visits).values({ empCode: input.empCode, employeeName: input.employeeName, visitDate: input.visitDate, customerName: input.customerName, location: input.location, purpose: input.purpose, travelMode: "Own Vehicle", distanceKm: "0.00", travelCost: "0.00", outcome: input.outcome || "Completed", notes: input.notes || null, source: input.source === "Unplanned" ? "Unplanned" : "Planned" });
+        const [createdVisit] = await tx.insert(visits).values({ empCode: input.empCode, employeeName: input.employeeName, visitDate: input.visitDate, customerName: input.customerName, visitedPersonName: input.visitedPersonName ?? null, location: input.location, purpose: input.purpose, travelMode: "Own Vehicle", distanceKm: "0.00", travelCost: "0.00", outcome: input.outcome || "Completed", notes: input.notes || null, source: input.source === "Unplanned" ? "Unplanned" : "Planned" });
         visitId = Number((createdVisit as { insertId?: number }).insertId);
       }
       if (input.followUpDate) {

@@ -22,9 +22,9 @@ export const visitInputSchema = z.object({
   customerName: requiredText("Customer name"),
   location: requiredText("Location", 160),
   purpose: z.enum(VISIT_PURPOSES),
-  travelMode: z.enum(TRAVEL_MODES),
-  distanceKm: z.number().min(0, "Distance cannot be negative.").max(100000),
-  travelCost: z.number().min(0, "Travel cost cannot be negative.").max(100000000),
+  travelMode: z.enum(TRAVEL_MODES).optional().default("Own Vehicle"),
+  distanceKm: z.number().min(0, "Distance cannot be negative.").max(100000).optional().default(0),
+  travelCost: z.number().min(0, "Travel cost cannot be negative.").max(100000000).optional().default(0),
   outcome: z.string().trim().min(1, "Add a visit outcome.").max(80),
   notes: z.string().max(4000).optional().default(""),
 });
@@ -152,6 +152,10 @@ export const followUpInputSchema = z.object({
   followUpTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Enter a valid time.").optional().nullable(),
   followUpPurpose: z.string().trim().max(500).optional().default(""),
   note: z.string().max(4000).optional().default(""),
+}).superRefine((item, ctx) => {
+  const parsedDate = new Date(`${item.followUpDate}T00:00:00Z`);
+  if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== item.followUpDate) ctx.addIssue({ code: "custom", path: ["followUpDate"], message: "Enter a valid follow-up date." });
+  if (item.followUpPurpose.trim().toLocaleLowerCase() === "visit" && !item.followUpTime) ctx.addIssue({ code: "custom", path: ["followUpTime"], message: "Choose a time for the scheduled visit." });
 });
 export const followUpListSchema = z.object({ empCode: empCodeSchema.optional(), status: z.enum(["Pending", "Done", "Rescheduled", "Cancelled"]).optional(), from: dateOnly.optional(), to: dateOnly.optional() });
 
@@ -161,7 +165,7 @@ export const dailyVisitActionSchema = z.object({
   mergeIntoPlannedVisitId: z.number().int().positive().nullable().optional(),
   parentStatusId: z.number().int().positive().nullable().optional(),
   originalPlannedDate: dateOnly.nullable().optional(),
-  customerName: requiredText("Customer name"), location: requiredText("Location", 160), purpose: z.enum(VISIT_PURPOSES),
+  customerName: requiredText("Customer name"), visitedPersonName: z.string().trim().max(120).optional(), location: requiredText("Location", 160), purpose: z.enum(VISIT_PURPOSES),
   source: z.enum(["Planned", "Unplanned"]).default("Planned"),
   status: z.enum(["Visited", "Missed", "Rescheduled"]),
   reason: z.enum(["Customer unavailable", "Rescheduled", "Internal work", "Leave", "Other"]).nullable().optional(),
@@ -173,9 +177,16 @@ export const dailyVisitActionSchema = z.object({
   if (item.source === "Planned" && !item.plannedVisitId) ctx.addIssue({ code: "custom", path: ["plannedVisitId"], message: "Link this response to a planned visit." });
   if (item.source === "Unplanned" && item.plannedVisitId) ctx.addIssue({ code: "custom", path: ["plannedVisitId"], message: "An unplanned visit cannot link to a plan item." });
   if (item.status === "Visited" && !item.outcome.trim()) ctx.addIssue({ code: "custom", path: ["outcome"], message: "Add a visit outcome." });
+  if (item.status === "Visited" && !item.visitedPersonName?.trim()) ctx.addIssue({ code: "custom", path: ["visitedPersonName"], message: "Enter the name of the person you visited." });
   if (item.status === "Missed" && !item.reason) ctx.addIssue({ code: "custom", path: ["reason"], message: "Choose a reason for the missed visit." });
   if (item.status === "Rescheduled" && (!item.newDate || item.reason !== "Rescheduled")) ctx.addIssue({ code: "custom", path: ["newDate"], message: "Choose a new date for the rescheduled visit." });
-  if (item.followUpDate && !item.followUpPurpose?.trim()) ctx.addIssue({ code: "custom", path: ["followUpPurpose"], message: "Add the follow-up purpose." });
+  if (item.followUpDate && !["Call", "Email", "Visit"].includes(item.followUpPurpose ?? "")) ctx.addIssue({ code: "custom", path: ["followUpPurpose"], message: "Choose Call, Email, or Visit for the follow-up." });
+  if (item.followUpPurpose === "Visit" && !item.followUpDate) ctx.addIssue({ code: "custom", path: ["followUpDate"], message: "Choose a date for the follow-up visit." });
+  if (item.followUpPurpose === "Visit" && !item.followUpTime) ctx.addIssue({ code: "custom", path: ["followUpTime"], message: "Choose a time for the follow-up visit." });
+  if (item.followUpDate) {
+    const parsedDate = new Date(`${item.followUpDate}T00:00:00Z`);
+    if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== item.followUpDate) ctx.addIssue({ code: "custom", path: ["followUpDate"], message: "Enter a valid follow-up date." });
+  }
 });
 
 export const monthlyPlanSheetDataSchema = z.object({

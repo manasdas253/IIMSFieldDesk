@@ -1,0 +1,1 @@
+ALTER TABLE `field_visits` ADD `visitedPersonName` varchar(120);

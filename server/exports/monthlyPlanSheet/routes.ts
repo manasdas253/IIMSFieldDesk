@@ -5,7 +5,7 @@ import { loadMonthlyPlanSheetData } from "./buildData";
 import { renderMonthlyPlanPdf } from "./renderPdf";
 import { renderMonthlyPlanXlsx } from "./renderXlsx";
 import { renderMonthlyPlanTemplate } from "./renderTemplate";
-import { listEmployeeMaster } from "../../fieldOpsV3Db";
+import { listEmployeeMaster, listPlanHolidays } from "../../fieldOpsV3Db";
 import { credentialVersion, findActiveEmployee, readSession } from "../../_core/employeeAuth";
 
 function parseQuery(request: Request) {
@@ -51,7 +51,11 @@ export function registerMonthlyPlanExportRoutes(app: Express) {
       const roster = await listEmployeeMaster(false);
       const selected = validCode === "ALL" ? roster : roster.filter(row => row.empCode === validCode);
       if (!selected.length) throw new Error("No active employee matches the selected Emp Code.");
-      const xlsx = await renderMonthlyPlanTemplate(validMonth, selected);
+      const monthStart = `${validMonth}-01`;
+      const [year, monthNumber] = validMonth.split("-").map(Number);
+      const monthEnd = new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
+      const holidays = (await listPlanHolidays(monthStart, monthEnd)).map(holiday => holiday.holidayDate);
+      const xlsx = await renderMonthlyPlanTemplate(validMonth, selected, holidays);
       res.status(200).type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").setHeader("Content-Disposition", `attachment; filename=Monthly_Plan_Input_${validMonth}_${validCode}.xlsx`).send(xlsx);
     } catch (error) { jsonFailure(res, error); }
   });

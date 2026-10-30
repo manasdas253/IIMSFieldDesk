@@ -174,18 +174,21 @@ export const fieldOpsRouter = router({
         const master = roster.find(employee => employee.empCode === codeResult.data)!;
         if (String(fields.employeeName ?? "").trim() !== master.employeeName) { errors.push({ rowNumber: row.rowNumber, field: "employeeName", message: "Employee Name does not match the selected Emp Code." }); continue; }
         if (String(fields.planMonth ?? "").trim() !== input.month) { errors.push({ rowNumber: row.rowNumber, field: "planMonth", message: `Plan Month must match ${input.month}.` }); continue; }
+        if (fields.coverageOnly === true) continue;
         const plannedDate = String(fields.plannedDate ?? "").trim();
-        const isNoVisit = String(fields.customerName ?? "").trim().toLocaleLowerCase() === "no visit";
-        if (isNoVisit) {
+        const statusEntry = String(fields.customerName ?? "").trim().toLocaleLowerCase();
+        const isStatusEntry = ["no visit", "office", "leave"].includes(statusEntry);
+        if (isStatusEntry) {
           if (!/^\d{4}-\d{2}-\d{2}$/.test(plannedDate) || !plannedDate.startsWith(`${input.month}-`)) {
-            errors.push({ rowNumber: row.rowNumber, field: "plannedDate", message: `Enter a valid date within ${input.month} for No Visit.` }); continue;
+            errors.push({ rowNumber: row.rowNumber, field: "plannedDate", message: `Enter a valid date within ${input.month} for ${statusEntry}.` }); continue;
           }
           if (!requiredDates.includes(plannedDate)) {
-            errors.push({ rowNumber: row.rowNumber, field: "plannedDate", message: "No Visit can only be entered for a working day, not a Sunday or configured holiday." }); continue;
+            errors.push({ rowNumber: row.rowNumber, field: "plannedDate", message: `${statusEntry} can only be entered for a working day, not a Sunday or configured holiday.` }); continue;
           }
           const covered = coveredDates.get(codeResult.data) ?? new Set<string>();
           covered.add(plannedDate); coveredDates.set(codeResult.data, covered);
-          validRows.push({ rowNumber: row.rowNumber, empCode: codeResult.data, item: { plannedDate, customerName: "No Visit", location: "—", purpose: "Other", applyForTicket: false, travelMode: null, routeFrom: null, routeTo: null, preferredDate: null, remarks: "No Visit" } });
+          const entryLabel = statusEntry === "no visit" ? "No Visit" : statusEntry === "office" ? "Office" : "Leave";
+          validRows.push({ rowNumber: row.rowNumber, empCode: codeResult.data, item: { plannedDate, customerName: entryLabel, location: "—", purpose: "Other", applyForTicket: false, travelMode: null, routeFrom: null, routeTo: null, preferredDate: null, remarks: entryLabel } });
           continue;
         }
         const yes = fields.applyForTicket === true || String(fields.applyForTicket ?? "").trim().toLocaleLowerCase() === "yes";
@@ -220,6 +223,10 @@ export const fieldOpsRouter = router({
       const visit = await getEmployeeForVisit(input.visitId);
       if (!visit || (ctx.user.role !== "admin" && visit.visit.empCode !== ctx.user.empCode)) throw new TRPCError({ code: "FORBIDDEN", message: "You can only add a follow-up to your own visit." });
       if (input.followUpDate < indiaDateString()) throw new TRPCError({ code: "BAD_REQUEST", message: "Follow-up date must be today or later." });
+      if (input.followUpPurpose.trim().toLocaleLowerCase() === "visit" && input.followUpDate === indiaDateString()) {
+        const now = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
+        if (!input.followUpTime || input.followUpTime <= now) throw new TRPCError({ code: "BAD_REQUEST", message: "Choose a visit time later than now." });
+      }
       return createFollowUp({ ...input, empCode: owner });
     }),
     list: protectedProcedure.input(followUpListSchema.optional()).query(({ ctx, input }) => listFollowUps({ ...(input ?? {}), empCode: ctx.user.role === "admin" ? input?.empCode : ctx.user.empCode })),
@@ -247,6 +254,10 @@ export const fieldOpsRouter = router({
         if (weekday === 0 || holidays.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Choose a working day that is not Sunday or a configured holiday." });
       }
       if (input.followUpDate && input.followUpDate < today) throw new TRPCError({ code: "BAD_REQUEST", message: "Follow-up date must be today or later." });
+      if (input.followUpPurpose === "Visit" && input.followUpDate === today) {
+        const now = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
+        if (!input.followUpTime || input.followUpTime <= now) throw new TRPCError({ code: "BAD_REQUEST", message: "Choose a follow-up visit time later than now." });
+      }
       if (input.completeFollowUpId) { const open = await getFollowUp(input.completeFollowUpId); if (!open || (ctx.user.role !== "admin" && open.empCode !== ctx.user.empCode)) throw new TRPCError({ code: "FORBIDDEN", message: "You can only update your own follow-ups." }); }
       return saveDailyVisitAction({ ...input, empCode: ctx.user.empCode, employeeName: ctx.user.employeeName });
     }),

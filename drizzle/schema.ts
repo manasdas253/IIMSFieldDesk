@@ -36,6 +36,7 @@ export const visits = mysqlTable("field_visits", {
   employeeName: varchar("employeeName", { length: 120 }).notNull(),
   visitDate: date("visitDate", { mode: "string" }).notNull(),
   customerName: varchar("customerName", { length: 180 }).notNull(),
+  visitedPersonName: varchar("visitedPersonName", { length: 120 }),
   location: varchar("location", { length: 160 }).notNull(),
   purpose: mysqlEnum("purpose", VISIT_PURPOSES).notNull(),
   travelMode: mysqlEnum("travelMode", TRAVEL_MODES).notNull(),

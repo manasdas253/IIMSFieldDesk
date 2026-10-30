@@ -84,8 +84,9 @@ describe("monthly plan sheet renderers", () => {
     const sheet = workbook.getWorksheet("SAMPLE01");
     expect(sheet?.getCell("A5").value).toBe("Emp Code");
     expect(sheet?.getCell("A6").value).toBe("SAMPLE01");
-    expect(sheet?.getCell("C6").value).toBe("2026-10");
-    expect(sheet?.getCell("D6").numFmt).toBe("dd-mm-yyyy");
+    expect(sheet?.getCell("C6").value).toBeInstanceOf(Date);
+    expect(sheet?.getCell("C6").numFmt).toBe("mm-dd-yy");
+    expect(sheet?.getCell("D6").formula).toContain("TEXT(C6");
     expect(sheet?.getCell("G6").dataValidation.type).toBe("list");
     expect(sheet?.getCell("A55").value).toBe("SAMPLE01");
     expect(sheet?.pageSetup.printArea).toBe("A1:M55");

@@ -1623,6 +1623,9 @@ button:not(:disabled),select:not(:disabled),input[type=checkbox] { cursor:pointe
 .daily-choice-row .button { min-height:42px; padding-inline:15px; }
 .daily-action-form .form-bottom { margin-top:0; padding-top:13px; border-top:1px solid #e9e7e0; }
 .daily-stop .employee-status { flex:none; }
+.daily-visit-prompt { display:inline-flex; align-items:center; justify-content:space-between; gap:18px; min-height:42px; padding:0 15px; border:1px solid #b91520; border-radius:11px; color:#fff; background:linear-gradient(135deg,#e32630,#bf1722); box-shadow:0 4px 10px rgba(191,23,34,.18); font-weight:700; transition:transform .18s ease,box-shadow .18s ease,background .18s ease; }
+.daily-visit-prompt:hover { transform:translateY(-1px); color:#fff; background:linear-gradient(135deg,#d51e28,#a9121c); box-shadow:0 7px 15px rgba(191,23,34,.24); }
+.daily-visit-prompt:focus-visible { outline:3px solid rgba(227,38,48,.3); outline-offset:2px; }
 @media (max-width:640px) {
   .daily-visit-flow { gap:13px; padding:15px; border-radius:15px; }
   .daily-visit-flow>.panel-heading { gap:13px; padding-bottom:14px; }
@@ -1630,6 +1633,7 @@ button:not(:disabled),select:not(:disabled),input[type=checkbox] { cursor:pointe
   .daily-stop { display:grid; grid-template-columns:minmax(0,1fr); gap:11px; padding:13px; }
   .daily-stop>button,.daily-stop>.employee-status { justify-self:start; }
   .daily-stop .button { min-height:42px; }
+  .daily-stop>.daily-visit-prompt { width:100%; justify-self:stretch; }
   .daily-visit-flow> :is(.button,.button-secondary) { width:100%; min-height:44px; justify-content:center; }
   .daily-choice-row { display:grid; grid-template-columns:1fr; }
   .daily-choice-row .button { justify-content:center; }
