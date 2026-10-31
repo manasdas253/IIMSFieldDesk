@@ -45,6 +45,12 @@ function formatVisitTime(value: Date | string) {
   return new Intl.DateTimeFormat("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" }).format(date);
 }
 
+function formatVisitDate(value: string) {
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return "Date unavailable";
+  return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(date);
+}
+
 function popupContent(city: CityVisitGroup) {
   const root = document.createElement("div");
   root.className = "india-map-popup";
@@ -60,11 +66,14 @@ function popupContent(city: CityVisitGroup) {
     person.textContent = visit.employeeName;
     const customer = document.createElement("span");
     customer.textContent = visit.customerName;
+    const status = document.createElement("span");
+    status.className = "india-map-popup-status";
+    status.textContent = visit.visitStatus === "Visited" ? "Completed visit" : visit.visitStatus === "Rescheduled" ? "Rescheduled plan" : "Planned visit";
     const details = document.createElement("span");
-    details.textContent = `${visit.purpose} · ${visit.outcome}`;
+    details.textContent = `${visit.purpose} - ${visit.outcome}${visit.notes ? ` - ${visit.notes}` : ""}`;
     const time = document.createElement("small");
-    time.textContent = formatVisitTime(visit.createdAt);
-    card.append(person, customer, details, time);
+    time.textContent = visit.visitDate ? formatVisitDate(visit.visitDate) : formatVisitTime(visit.createdAt);
+    card.append(person, customer, status, details, time);
     root.append(card);
   }
   return root;
@@ -143,7 +152,7 @@ function pinFeatures(cities: CityVisitGroup[], selectedCityKey: string | null): 
     type: "FeatureCollection",
     features: cities.flatMap(city => city.coordinates ? [{
       type: "Feature" as const,
-      properties: { cityKey: city.key, count: city.count, color: PURPOSE_COLORS[city.dominantPurpose], selected: city.key === selectedCityKey },
+      properties: { cityKey: city.key, count: city.count, color: city.visits.some(visit => visit.visitStatus === "Visited") ? PURPOSE_COLORS[city.dominantPurpose] : "#d09a35", selected: city.key === selectedCityKey },
       geometry: { type: "Point" as const, coordinates: city.coordinates },
     }] : []),
   };
@@ -240,11 +249,13 @@ export default function IndiaVisitsMap({ visits, selectedCityKey, focusRequest, 
             radius: 6 + Math.min(9, Math.sqrt(city.count) * 3),
             color: city.key === selectedCityKey ? brandPalette.primary : "#fffaf3",
             weight: city.key === selectedCityKey ? 4 : 2,
-            fillColor: PURPOSE_COLORS[city.dominantPurpose],
+            fillColor: city.visits.some(visit => visit.visitStatus === "Visited") ? PURPOSE_COLORS[city.dominantPurpose] : "#d09a35",
             fillOpacity: 0.96,
           }).addTo(map);
           marker.bindPopup(popupContent(city), { maxWidth: 320 });
           marker.on("click", () => onCitySelect(city.key));
+          marker.on("mouseover", () => marker.openPopup());
+          marker.on("mouseout", () => marker.closePopup());
           markers.set(city.key, marker);
         }
         leafletMarkersRef.current = markers;
@@ -319,6 +330,10 @@ export default function IndiaVisitsMap({ visits, selectedCityKey, focusRequest, 
           map.on("mousemove", event => {
             const features = map.queryRenderedFeatures(event.point, { layers: [MAPLIBRE_PIN_LAYER, MAPLIBRE_BAR_LAYER] });
             map.getCanvas().style.cursor = features.length ? "pointer" : "";
+            const key = String(features[0]?.properties?.cityKey ?? "");
+            const city = cities.find(item => item.key === key);
+            if (city?.coordinates) popupRef.current?.setLngLat(city.coordinates).setDOMContent(popupContent(city)).addTo(map);
+            else popupRef.current?.remove();
           });
           map.on("click", event => {
             const feature = map.queryRenderedFeatures(event.point, { layers: [MAPLIBRE_PIN_LAYER, MAPLIBRE_BAR_LAYER] })[0];

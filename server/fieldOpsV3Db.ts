@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, isNotNull, lte, or } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
 import { dailyVisitStatuses, employees, followUps, monthlyPlanItems, monthlyPlans, planHolidays, visits } from "../drizzle/schema";
 import { currentMonthlyPlanItems, type EmployeeInput, type FollowUpInput, type MonthlyPlanSubmitInput, type dailyVisitActionSchema } from "../shared/fieldOps";
 import type { z } from "zod";
@@ -254,6 +254,16 @@ export async function listDailyVisitStatuses(filter: { from?: string; to?: strin
   const conditions = [filter.empCode ? eq(dailyVisitStatuses.empCode, filter.empCode) : undefined, filter.from ? gte(dailyVisitStatuses.visitDate, filter.from) : undefined, filter.to ? lte(dailyVisitStatuses.visitDate, filter.to) : undefined].filter(Boolean);
   const statusRows = or(eq(dailyVisitStatuses.status, "Missed"), eq(dailyVisitStatuses.status, "Rescheduled"), and(eq(dailyVisitStatuses.status, "Planned"), isNotNull(dailyVisitStatuses.parentStatusId))!, eq(dailyVisitStatuses.source, "Unplanned"))!;
   return db.select().from(dailyVisitStatuses).where(conditions.length ? and(...conditions, statusRows) : statusRows).orderBy(asc(dailyVisitStatuses.visitDate), asc(dailyVisitStatuses.id));
+}
+
+/** Actual completed visits only; daily status is the source of truth for "Yes, Visited" submissions. */
+export async function listCompletedDailyVisits(date: string) {
+  const db = await getDb(); if (!db) throw new Error("Database is not available");
+  return db.select().from(dailyVisitStatuses).where(and(
+    eq(dailyVisitStatuses.visitDate, date),
+    eq(dailyVisitStatuses.status, "Visited"),
+    isNull(dailyVisitStatuses.mergedIntoStatusId),
+  )).orderBy(asc(dailyVisitStatuses.location), asc(dailyVisitStatuses.employeeName), asc(dailyVisitStatuses.id));
 }
 
 export async function listDailyVisitWorkload(filter: { from: string; to: string; empCode?: string }) {

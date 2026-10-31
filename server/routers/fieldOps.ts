@@ -3,7 +3,7 @@ import { z } from "zod";
 import { dailyVisitActionSchema, empCodeSchema, employeeInputSchema, employeeSetActiveSchema, employeeUpdateSchema, followUpInputSchema, followUpListSchema, holidayInputSchema, indiaDateString, monthSchema, monthlyPlanItemInputSchema, monthlyPlanSheetQuerySchema, monthlyPlanSubmitSchema, monthlyPlanUploadValidationSchema, nextMondayDate, planInputSchema, planListFilterSchema, planUpdateSchema, visitInputSchema, visitListFilterSchema, visitUpdateSchema } from "../../shared/fieldOps";
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import { countVisitsThrough, createPlan, createVisit, deletePlan, deleteVisit, getEmployeeNames, getPlan, getRecentVisits, getVisit, listPlans, listVisits, listVisitsThroughPage, updatePlan, updateVisit } from "../fieldOpsDb";
-import { cancelFollowUp, createEmployee, createFollowUp, createPlanHoliday, deletePlanHoliday, followUpDueSummary, getEmployeeForVisit, getFollowUp, listDailyVisitStatuses, listDailyVisitWorkload, listEmployeeDailyItems, saveDailyVisitAction, listEmployeeMaster, listFollowUps, listMonthlyPlanReport, listExecutiveMonthlyTravel, listPlanHolidays, markFollowUpDone, rescheduleFollowUp, setEmployeeActive, submitMonthlyPlan, updateEmployee } from "../fieldOpsV3Db";
+import { cancelFollowUp, createEmployee, createFollowUp, createPlanHoliday, deletePlanHoliday, followUpDueSummary, getEmployeeForVisit, getFollowUp, listCompletedDailyVisits, listDailyVisitStatuses, listDailyVisitWorkload, listEmployeeDailyItems, saveDailyVisitAction, listEmployeeMaster, listFollowUps, listMonthlyPlanReport, listExecutiveMonthlyTravel, listPlanHolidays, markFollowUpDone, rescheduleFollowUp, setEmployeeActive, submitMonthlyPlan, updateEmployee } from "../fieldOpsV3Db";
 import { loadMonthlyPlanSheetData } from "../exports/monthlyPlanSheet/buildData";
 
 const dateRangeSchema = z.object({ from: z.string().optional(), to: z.string().optional(), employeeName: z.string().optional() });
@@ -67,6 +67,7 @@ export const fieldOpsRouter = router({
   }),
   reports: router({
     executiveTravelSummary: adminProcedure.input(z.object({ month: monthSchema })).query(({ input }) => listExecutiveMonthlyTravel(input.month)),
+    executiveCompletedVisits: adminProcedure.input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })).query(({ input }) => listCompletedDailyVisits(input.date)),
     overview: adminProcedure.query(async () => {
       const today = indiaDateString();
       const monthStart = `${today.slice(0, 7)}-01`;

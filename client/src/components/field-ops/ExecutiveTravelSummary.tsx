@@ -1,8 +1,11 @@
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import ExcelJS from "exceljs";
 import { Download, FileSpreadsheet, FileText, MapPin, Users, Building2, Route } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import type { DailyMapVisit } from "./indiaMapData";
+
+const IndiaVisitsMap = lazy(() => import("./IndiaVisitsMap"));
 
 type GroupMode = "date" | "location" | "department";
 const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -16,11 +19,20 @@ export default function ExecutiveTravelSummaryView() {
   const [search, setSearch] = useState("");
   const month = date.slice(0, 7);
   const query = trpc.fieldOps.reports.executiveTravelSummary.useQuery({ month }, { enabled: /^\d{4}-\d{2}$/.test(month) });
+  const completedVisitsQuery = trpc.fieldOps.reports.executiveCompletedVisits.useQuery({ date }, { enabled: /^\d{4}-\d{2}-\d{2}$/.test(date) });
+  const [selectedCityKey, setSelectedCityKey] = useState<string | null>(null);
+  const [focusRequest, setFocusRequest] = useState(0);
+  const onCitySelect = useCallback((cityKey: string) => { setSelectedCityKey(cityKey); setFocusRequest(value => value + 1); }, []);
+  useEffect(() => { setSelectedCityKey(null); }, [date]);
+  const actualMapVisits = useMemo<DailyMapVisit[]>(() => (completedVisitsQuery.data ?? []).map(visit => ({ id: visit.id, employeeName: visit.employeeName, customerName: visit.customerName, location: visit.location, purpose: visit.purpose, outcome: visit.outcome ?? "Completed", createdAt: visit.createdAt, visitDate: visit.visitDate, notes: visit.notes, visitStatus: "Visited" })), [completedVisitsQuery.data]);
   const rows = query.data ?? [];
   const locations = useMemo(() => [...new Set(rows.map(row => row.location).filter(Boolean))].sort(), [rows]);
   const departments = useMemo(() => [...new Set(rows.map(row => row.department).filter(Boolean))].sort(), [rows]);
   const filtered = useMemo(() => rows.filter(row => (location === "ALL" || row.location === location) && (department === "ALL" || row.department === department) && (!search || [row.employeeName, row.empCode, row.department, row.customerName, row.location, row.purpose, row.remarks].some(value => value.toLocaleLowerCase().includes(search.toLocaleLowerCase())))), [rows, location, department, search]);
   const dayRows = filtered.filter(row => row.plannedDate === date);
+  const plannedMapVisits = useMemo<DailyMapVisit[]>(() => dayRows.filter(plan => !actualMapVisits.some(visit => visit.employeeName.trim().toLocaleLowerCase("en-IN") === plan.employeeName.trim().toLocaleLowerCase("en-IN") && visit.customerName.trim().toLocaleLowerCase("en-IN") === plan.customerName.trim().toLocaleLowerCase("en-IN"))).map((plan, index) => ({ id: -Math.abs(typeof plan.id === "number" ? plan.id : index + 1), employeeName: plan.employeeName, customerName: plan.customerName, location: plan.location, purpose: plan.purpose, outcome: "No completed visit recorded", createdAt: new Date(`${plan.plannedDate}T00:00:00Z`), visitDate: plan.plannedDate, notes: plan.remarks || null, visitStatus: "travelStatus" in plan && plan.travelStatus === "Rescheduled" ? "Rescheduled" : "Planned" })), [dayRows, actualMapVisits]);
+  const mapVisits = useMemo(() => [...actualMapVisits, ...plannedMapVisits], [actualMapVisits, plannedMapVisits]);
+  const plannedMapVisitCount = plannedMapVisits.length;
   const groupRows = dayRows;
   const keyFor = (row: typeof rows[number]) => mode === "date" ? row.plannedDate : mode === "location" ? row.location : row.department || "Unassigned";
   const groups = useMemo(() => Object.entries(groupRows.reduce<Record<string, typeof groupRows>>((acc, row) => { const key = keyFor(row); (acc[key] ??= []).push(row); return acc; }, {})).sort(([a], [b]) => a.localeCompare(b)), [groupRows, mode]);
@@ -43,6 +55,11 @@ export default function ExecutiveTravelSummaryView() {
     <section className="executive-kpis"><article><span><Users size={17}/>Travelling on {displayDate(date)}</span><strong>{new Set(dayRows.map(row => row.empCode)).size}</strong><small>employees · planned</small></article><article><span><MapPin size={17}/>Unique locations</span><strong>{new Set(dayRows.map(row => row.location)).size}</strong><small>for selected date</small></article><article><span><Building2 size={17}/>Business Verticals</span><strong>{new Set(dayRows.map(row => row.department).filter(Boolean)).size}</strong><small>represented on selected date</small></article><article><span><Route size={17}/>Planned visits</span><strong>{dayRows.length}</strong><small>from submitted plans</small></article></section>
     <section className="panel"><div className="panel-heading executive-report-heading"><div><p className="eyebrow">SELECTED DATE</p><h2>{mode === "date" ? `Planned travel · ${displayDate(date)}` : `${mode === "location" ? "Location" : "Business Vertical"}-wise · ${displayDate(date)}`}</h2></div><div className="executive-tabs">{(["date", "location", "department"] as GroupMode[]).map(value => <button key={value} className={mode === value ? "active" : ""} onClick={() => setMode(value)}>{value === "department" ? "Business Vertical" : value[0].toUpperCase()+value.slice(1)}-wise</button>)}</div></div>
       {query.isLoading ? <p className="page-subtitle">Loading submitted plans…</p> : query.isError ? <p className="error-block">Could not load the travel summary. Check the connection and retry.</p> : !groups.length ? <div className="empty-state"><strong>No submitted planned travel found for {displayDate(date)}</strong><p>Try another date or adjust the filters.</p></div> : <div className="table-scroll executive-table"><table className="data-table"><thead><tr><th>{mode === "date" ? "Travel date" : mode === "location" ? "Location" : "Business Vertical"}</th><th>Employee</th><th>Emp Code</th><th>Business Vertical</th><th>Customer</th><th>Location</th><th>Remarks / Purpose</th><th>Travel status</th></tr></thead><tbody>{groups.flatMap(([group, members]) => members.map((row, index) => <tr key={row.id}><td>{index === 0 ? mode === "date" ? displayDate(group) : group : ""}</td><td>{row.employeeName}</td><td>{row.empCode}</td><td>{row.department || "—"}</td><td>{row.customerName}</td><td>{row.location}</td><td>{row.remarks ? `${row.remarks} · ${row.purpose}` : row.purpose}</td><td><span className="planned-badge">{"travelStatus" in row ? row.travelStatus : "Planned"} · v{row.version}</span></td></tr>))}</tbody></table></div>}
-    </section><div className="executive-print-brand"><img src="/brand/cka-iims-wordmark.png" alt="CKA Birla Group and IIMS"/><span>Executive Travel Summary · Planned travel · {month}</span></div>
+    </section>
+    <section className="panel india-map-panel executive-actual-map" aria-label="Completed customer visits on the India map">
+      <div className="panel-heading"><div><p className="eyebrow">VISITS & SUBMITTED PLANS</p><h2>Customer locations across India</h2><p className="page-subtitle">Selected date: {displayDate(date)}. Amber markers are planned; colored markers include completed visits.</p></div><span className="panel-count">{actualMapVisits.length} completed · {plannedMapVisitCount} planned</span></div>
+      {completedVisitsQuery.isLoading ? <div className="india-map-loading" aria-label="Loading visits map"><div className="skeleton skeleton-row"/><div className="skeleton skeleton-row"/><div className="skeleton skeleton-row"/></div> : completedVisitsQuery.isError ? <p className="error-block">Could not load visit details for the map.</p> : !mapVisits.length ? <div className="empty-state india-map-empty"><div className="empty-mark">-</div><strong>No completed visits or submitted plans found for {displayDate(date)}</strong><p>Locations appear here when employees submit a plan or record a completed visit.</p></div> : <Suspense fallback={<div className="india-map-loading" aria-label="Loading India map"><div className="skeleton skeleton-row"/></div>}><IndiaVisitsMap visits={mapVisits} selectedCityKey={selectedCityKey} focusRequest={focusRequest} onCitySelect={onCitySelect} onUnavailable={() => undefined}/></Suspense>}
+    </section>
+    <div className="executive-print-brand"><img src="/brand/cka-iims-wordmark.png" alt="CKA Birla Group and IIMS"/><span>Executive Travel Summary · Planned travel · {month}</span></div>
   </div>;
 }

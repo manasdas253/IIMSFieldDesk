@@ -9,6 +9,9 @@ export interface DailyMapVisit {
   purpose: VisitPurpose;
   outcome: string;
   createdAt: Date | string;
+  visitDate?: string;
+  notes?: string | null;
+  visitStatus?: "Visited" | "Planned" | "Rescheduled";
 }
 
 type CityCoordinates = { name: string; coordinates: [number, number] };
@@ -147,7 +150,7 @@ export function groupVisitsByCity(visits: DailyMapVisit[]) {
   }
 
   const cities = [...groups.values()].map(group => {
-    group.visits.sort((a, b) => timestamp(b.createdAt) - timestamp(a.createdAt));
+    group.visits.sort((a, b) => timestamp(b.visitDate ?? b.createdAt) - timestamp(a.visitDate ?? a.createdAt));
     group.dominantPurpose = VISIT_PURPOSES.reduce((best, purpose) => group.purposeCounts[purpose] > group.purposeCounts[best] ? purpose : best, VISIT_PURPOSES[0]);
     return group;
   }).sort((a, b) => a.name.localeCompare(b.name, "en-IN"));
