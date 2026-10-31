@@ -3,7 +3,8 @@ import { z } from "zod";
 import { dailyVisitActionSchema, empCodeSchema, employeeInputSchema, employeeSetActiveSchema, employeeUpdateSchema, followUpInputSchema, followUpListSchema, holidayInputSchema, indiaDateString, monthSchema, monthlyPlanItemInputSchema, monthlyPlanSheetQuerySchema, monthlyPlanSubmitSchema, monthlyPlanUploadValidationSchema, nextMondayDate, planInputSchema, planListFilterSchema, planUpdateSchema, visitInputSchema, visitListFilterSchema, visitUpdateSchema } from "../../shared/fieldOps";
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import { countVisitsThrough, createPlan, createVisit, deletePlan, deleteVisit, getEmployeeNames, getPlan, getRecentVisits, getVisit, listPlans, listVisits, listVisitsThroughPage, updatePlan, updateVisit } from "../fieldOpsDb";
-import { cancelFollowUp, createEmployee, createFollowUp, createPlanHoliday, deletePlanHoliday, followUpDueSummary, getEmployeeForVisit, getFollowUp, listCompletedDailyVisits, listDailyVisitStatuses, listDailyVisitWorkload, listEmployeeDailyItems, saveDailyVisitAction, listEmployeeMaster, listFollowUps, listMonthlyPlanReport, listExecutiveMonthlyTravel, listPlanHolidays, markFollowUpDone, rescheduleFollowUp, setEmployeeActive, submitMonthlyPlan, updateEmployee } from "../fieldOpsV3Db";
+import { cancelFollowUp, createEmployee, createFollowUp, createPlanHoliday, deletePlanHoliday, followUpDueSummary, getEmployeeForVisit, getFollowUp, getMonthlyPlanChangeState, listCompletedDailyVisits, listDailyVisitStatuses, listDailyVisitWorkload, listEmployeeDailyItems, saveDailyVisitAction, listEmployeeMaster, listFollowUps, listMonthlyPlanReport, listExecutiveMonthlyTravel, listPlanHolidays, markFollowUpDone, rescheduleFollowUp, setEmployeeActive, submitMonthlyPlan, updateEmployee } from "../fieldOpsV3Db";
+import { checkLockedMonthlyPlanDays, MonthlyPlanChangeRejected } from "../monthlyPlanChange";
 import { loadMonthlyPlanSheetData } from "../exports/monthlyPlanSheet/buildData";
 
 const dateRangeSchema = z.object({ from: z.string().optional(), to: z.string().optional(), employeeName: z.string().optional() });
@@ -147,6 +148,7 @@ export const fieldOpsRouter = router({
     monthlyPlanSheet: adminProcedure.input(monthlyPlanSheetQuerySchema).query(({ input }) => loadMonthlyPlanSheetData(input.month, input.empCode, { visited: input.visited === "1", blank: input.type === "blank" })),
   }),
   monthlyPlans: router({
+    changeInfo: protectedProcedure.input(z.object({ month: monthSchema })).query(({ ctx, input }) => getMonthlyPlanChangeState(ctx.user.empCode, input.month)),
     template: adminProcedure.input(z.object({ month: monthSchema, empCode: z.union([empCodeSchema, z.literal("ALL")]) })).query(async ({ input }) => {
       const roster = await listEmployeeMaster(false);
       const selected = input.empCode === "ALL" ? roster : roster.filter(employee => employee.empCode === input.empCode);
@@ -155,6 +157,7 @@ export const fieldOpsRouter = router({
     validateUpload: protectedProcedure.input(monthlyPlanUploadValidationSchema).mutation(async ({ ctx, input }) => {
       const roster = (await listEmployeeMaster(false)).filter(employee => ctx.user.role === "admin" || employee.empCode === ctx.user.empCode);
       const knownCodes = new Set(roster.map(employee => employee.empCode));
+      const changeState = ctx.user.role === "employee" ? await getMonthlyPlanChangeState(ctx.user.empCode, input.month) : null;
       const [year, month] = input.month.split("-").map(Number);
       const monthStart = `${input.month}-01`;
       const monthEnd = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
@@ -165,6 +168,8 @@ export const fieldOpsRouter = router({
         const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
         if (weekday !== 0 && !holidays.has(date)) requiredDates.push(date);
       }
+      const today = indiaDateString();
+      const coverageDates = changeState?.planVersion ? requiredDates.filter(date => date >= today || changeState.savedItems.some(item => item.plannedDate === date)) : requiredDates;
       const errors: Array<{ rowNumber: number; field: string; message: string }> = [];
       const validRows: Array<{ rowNumber: number; empCode: string; item: z.infer<typeof monthlyPlanItemInputSchema> }> = [];
       const coveredDates = new Map<string, Set<string>>();
@@ -207,15 +212,20 @@ export const fieldOpsRouter = router({
         if (knownCodes.has(code)) employeesInUpload.add(code);
       }
       for (const empCode of employeesInUpload) {
-        const missingDates = requiredDates.filter(date => !coveredDates.get(empCode)?.has(date));
+        const missingDates = coverageDates.filter(date => !coveredDates.get(empCode)?.has(date));
         if (missingDates.length) errors.push({ rowNumber: 0, field: "coverage", message: `Please upload plans for all working days of the selected month. Missing dates: ${missingDates.join(", ")}.` });
       }
       const seen = new Map<string, number[]>();
       for (const row of validRows) { const key = `${row.empCode}\u0000${row.item.plannedDate}\u0000${row.item.customerName.trim().toLocaleLowerCase()}`; seen.set(key, [...(seen.get(key) ?? []), row.rowNumber]); }
       const warnings = [...seen.values()].filter(rowNumbers => rowNumbers.length > 1).flatMap(rowNumbers => rowNumbers.slice(1).map(rowNumber => ({ rowNumber, message: `Duplicate Emp Code / planned date / customer combination also appears on row ${rowNumbers[0]}.` })));
-      return { validRows, errors, warnings, totalRows: input.rows.length, validCount: validRows.length };
+      const lockedErrors = changeState ? checkLockedMonthlyPlanDays({ month: input.month, today, candidates: validRows.map(row => ({ rowNumber: row.rowNumber, item: row.item })), savedItems: changeState.savedItems, answeredDates: changeState.answeredDates, currentPlanVersion: changeState.planVersion, basePlanVersion: input.basePlanVersion, templateType: input.templateType, enforce: ctx.user.role === "employee" }) : [];
+      errors.push(...lockedErrors);
+      return { validRows, errors, lockedErrors: lockedErrors.filter(error => error.field === "Past days"), warnings, totalRows: input.rows.length, validCount: validRows.length };
     }),
-    submit: protectedProcedure.input(monthlyPlanSubmitSchema).mutation(({ ctx, input }) => submitMonthlyPlan({ ...input, empCode: ctx.user.role === "admin" ? input.empCode : ctx.user.empCode })),
+    submit: protectedProcedure.input(monthlyPlanSubmitSchema).mutation(async ({ ctx, input }) => {
+      try { return await submitMonthlyPlan({ ...input, empCode: ctx.user.role === "admin" ? input.empCode : ctx.user.empCode }, { enforceChange: ctx.user.role === "employee" }); }
+      catch (error) { if (error instanceof MonthlyPlanChangeRejected) throw new TRPCError({ code: "BAD_REQUEST", message: error.message }); throw error; }
+    }),
     list: protectedProcedure.input(z.object({ month: monthSchema, empCode: empCodeSchema.optional() })).query(({ ctx, input }) => listMonthlyPlanReport(input.month, ctx.user.role === "admin" ? input.empCode : ctx.user.empCode)),
   }),
   followUps: router({

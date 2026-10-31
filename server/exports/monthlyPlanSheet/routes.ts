@@ -1,11 +1,11 @@
 import { ZipArchive } from "archiver";
 import type { Express, Request, Response } from "express";
-import { monthlyPlanSheetQuerySchema } from "../../../shared/fieldOps";
+import { indiaDateString, monthlyPlanSheetQuerySchema } from "../../../shared/fieldOps";
 import { loadMonthlyPlanSheetData } from "./buildData";
 import { renderMonthlyPlanPdf } from "./renderPdf";
 import { renderMonthlyPlanXlsx } from "./renderXlsx";
 import { renderMonthlyPlanTemplate } from "./renderTemplate";
-import { listEmployeeMaster, listPlanHolidays } from "../../fieldOpsV3Db";
+import { getMonthlyPlanChangeState, listEmployeeMaster, listPlanHolidays } from "../../fieldOpsV3Db";
 import { credentialVersion, findActiveEmployee, readSession } from "../../_core/employeeAuth";
 
 function parseQuery(request: Request) {
@@ -48,6 +48,9 @@ export function registerMonthlyPlanExportRoutes(app: Express) {
       const validMonth = monthlyPlanSheetQuerySchema.shape.month.parse(month);
       const validCode = monthlyPlanSheetQuerySchema.shape.empCode.parse(empCode);
       if (sessionEmployee.role !== "admin" && validCode !== sessionEmployee.empCode) { res.status(403).json({ error: "You can only download your own employee template." }); return; }
+      const changeMode = req.query.mode === "change";
+      if (req.query.mode !== undefined && req.query.mode !== "change") throw new Error("Unknown template mode.");
+      if (changeMode && sessionEmployee.role !== "employee") { res.status(403).json({ error: "Change templates are available to employees only." }); return; }
       const roster = await listEmployeeMaster(false);
       const selected = validCode === "ALL" ? roster : roster.filter(row => row.empCode === validCode);
       if (!selected.length) throw new Error("No active employee matches the selected Emp Code.");
@@ -55,7 +58,14 @@ export function registerMonthlyPlanExportRoutes(app: Express) {
       const [year, monthNumber] = validMonth.split("-").map(Number);
       const monthEnd = new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
       const holidays = (await listPlanHolidays(monthStart, monthEnd)).map(holiday => holiday.holidayDate);
-      const xlsx = await renderMonthlyPlanTemplate(validMonth, selected, holidays);
+      const today = indiaDateString();
+      let change: Awaited<ReturnType<typeof getMonthlyPlanChangeState>> | undefined;
+      if (changeMode) {
+        if (monthEnd < today) throw new Error("This month is over. Nothing can be changed.");
+        change = await getMonthlyPlanChangeState(sessionEmployee.empCode, validMonth);
+        if (!change.planVersion) throw new Error("Submit your plan before downloading a change template.");
+      }
+      const xlsx = await renderMonthlyPlanTemplate(validMonth, selected, holidays, change ? { today, planVersion: change.planVersion, items: change.savedItems, answeredDates: change.answeredDates } : undefined);
       res.status(200).type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").setHeader("Content-Disposition", `attachment; filename=Monthly_Plan_Input_${validMonth}_${validCode}.xlsx`).send(xlsx);
     } catch (error) { jsonFailure(res, error); }
   });

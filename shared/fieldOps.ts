@@ -134,6 +134,9 @@ export const monthlyPlanSubmitSchema = z.object({
   empCode: empCodeSchema,
   planMonth: monthSchema,
   items: z.array(monthlyPlanItemInputSchema),
+  templateType: z.enum(["standard", "change"]).optional(),
+  downloadedOn: dateOnly.optional(),
+  basePlanVersion: z.number().int().nonnegative().optional(),
 });
 export const monthlyPlanSheetQuerySchema = z.object({
   month: monthSchema,
@@ -218,5 +221,8 @@ export type FollowUpInput = z.infer<typeof followUpInputSchema>;
 export const monthlyPlanUploadValidationSchema = z.object({
   month: monthSchema,
   rows: z.array(z.object({ rowNumber: z.number().int().positive(), fields: z.record(z.string(), z.unknown()) })),
+  templateType: z.enum(["standard", "change"]).optional(),
+  downloadedOn: dateOnly.optional(),
+  basePlanVersion: z.number().int().nonnegative().optional(),
 });
 export type MonthlyPlanUploadValidationInput = z.infer<typeof monthlyPlanUploadValidationSchema>;

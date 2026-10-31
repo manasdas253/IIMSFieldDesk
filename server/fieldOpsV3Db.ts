@@ -1,6 +1,7 @@
 import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
 import { dailyVisitStatuses, employees, followUps, monthlyPlanItems, monthlyPlans, planHolidays, visits } from "../drizzle/schema";
-import { currentMonthlyPlanItems, type EmployeeInput, type FollowUpInput, type MonthlyPlanSubmitInput, type dailyVisitActionSchema } from "../shared/fieldOps";
+import { currentMonthlyPlanItems, indiaDateString, type EmployeeInput, type FollowUpInput, type MonthlyPlanItemInput, type MonthlyPlanSubmitInput, type dailyVisitActionSchema } from "../shared/fieldOps";
+import { checkLockedMonthlyPlanDays, MonthlyPlanChangeRejected, takeMatchingPreviousPlanItem } from "./monthlyPlanChange";
 import type { z } from "zod";
 import { getDb } from "./db";
 
@@ -34,7 +35,24 @@ export async function setEmployeeActive(empCode: string, isActive: boolean) {
   return safe;
 }
 
-export async function submitMonthlyPlan(input: MonthlyPlanSubmitInput) {
+function toMonthlyPlanInput(item: typeof monthlyPlanItems.$inferSelect): MonthlyPlanItemInput {
+  return { plannedDate: item.plannedDate, customerName: item.customerName, location: item.location, purpose: item.purpose, applyForTicket: item.applyForTicket, travelMode: item.travelMode, routeFrom: item.routeFrom, routeTo: item.routeTo, preferredDate: item.preferredDate, remarks: item.remarks ?? "" };
+}
+
+export async function getMonthlyPlanChangeState(empCode: string, month: string) {
+  const db = await getDb(); if (!db) throw new Error("Database is not available");
+  const monthStart = `${month}-01`;
+  const monthEnd = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10);
+  const [plan] = await db.select().from(monthlyPlans).where(and(eq(monthlyPlans.empCode, empCode), eq(monthlyPlans.planMonth, month))).limit(1);
+  const [savedRows, answers] = await Promise.all([
+    plan ? db.select().from(monthlyPlanItems).where(eq(monthlyPlanItems.planId, plan.id)) : Promise.resolve([]),
+    db.select({ visitDate: dailyVisitStatuses.visitDate }).from(dailyVisitStatuses).where(and(eq(dailyVisitStatuses.empCode, empCode), gte(dailyVisitStatuses.visitDate, monthStart), lte(dailyVisitStatuses.visitDate, monthEnd), inArray(dailyVisitStatuses.status, ["Visited", "Missed", "Rescheduled"]))),
+  ]);
+  const savedItems = plan ? currentMonthlyPlanItems(savedRows, plan.version).map(toMonthlyPlanInput) : [];
+  return { planVersion: plan?.version ?? 0, savedItems, answeredDates: [...new Set(answers.map(row => row.visitDate))] };
+}
+
+export async function submitMonthlyPlan(input: MonthlyPlanSubmitInput, options: { enforceChange?: boolean; today?: string } = {}) {
   const db = await getDb(); if (!db) throw new Error("Database is not available");
   const [employee] = await db.select().from(employees).where(and(eq(employees.empCode, input.empCode), eq(employees.isActive, true))).limit(1);
   if (!employee) throw new Error("Emp Code is unknown or inactive.");
@@ -42,6 +60,14 @@ export async function submitMonthlyPlan(input: MonthlyPlanSubmitInput) {
   for (const row of input.items) if (!row.plannedDate.startsWith(prefix)) throw new Error(`Planned date ${row.plannedDate} is outside ${input.planMonth}.`);
   return db.transaction(async tx => {
     const [existing] = await tx.select().from(monthlyPlans).where(and(eq(monthlyPlans.empCode, employee.empCode), eq(monthlyPlans.planMonth, input.planMonth))).limit(1);
+    if (options.enforceChange && existing) {
+      const [savedRows, answers] = await Promise.all([
+        tx.select().from(monthlyPlanItems).where(eq(monthlyPlanItems.planId, existing.id)),
+        tx.select({ visitDate: dailyVisitStatuses.visitDate }).from(dailyVisitStatuses).where(and(eq(dailyVisitStatuses.empCode, employee.empCode), gte(dailyVisitStatuses.visitDate, `${input.planMonth}-01`), lte(dailyVisitStatuses.visitDate, `${input.planMonth}-${String(new Date(Date.UTC(Number(input.planMonth.slice(0, 4)), Number(input.planMonth.slice(5, 7)), 0)).getUTCDate()).padStart(2, "0")}`), inArray(dailyVisitStatuses.status, ["Visited", "Missed", "Rescheduled"]))),
+      ]);
+      const lockedErrors = checkLockedMonthlyPlanDays({ month: input.planMonth, today: options.today ?? indiaDateString(), candidates: input.items.map((item, index) => ({ rowNumber: index + 1, item })), savedItems: currentMonthlyPlanItems(savedRows, existing.version).map(toMonthlyPlanInput), answeredDates: [...new Set(answers.map(row => row.visitDate))], currentPlanVersion: existing.version, basePlanVersion: input.basePlanVersion, templateType: input.templateType, enforce: true });
+      if (lockedErrors.length) throw new MonthlyPlanChangeRejected(lockedErrors);
+    }
     const version = existing ? existing.version + 1 : 1;
     let planId: number;
     let priorItems: typeof monthlyPlanItems.$inferSelect[] = [];
@@ -55,11 +81,9 @@ export async function submitMonthlyPlan(input: MonthlyPlanSubmitInput) {
     }
     const remainingPrior = [...priorItems];
     for (const item of input.items) {
-      const normalizedCustomer = item.customerName.trim().toLocaleLowerCase("en-IN");
-      const exactMatch = remainingPrior.findIndex(row => row.customerName.trim().toLocaleLowerCase("en-IN") === normalizedCustomer && row.plannedDate === item.plannedDate);
-      const matchIndex = exactMatch >= 0 ? exactMatch : remainingPrior.findIndex(row => row.customerName.trim().toLocaleLowerCase("en-IN") === normalizedCustomer);
+      const previous = takeMatchingPreviousPlanItem(remainingPrior, item);
       const values = { version, plannedDate: item.plannedDate, customerName: item.customerName, location: item.location, purpose: item.purpose, applyForTicket: item.applyForTicket, travelMode: item.applyForTicket ? item.travelMode ?? null : null, routeFrom: item.applyForTicket ? item.routeFrom ?? null : null, routeTo: item.applyForTicket ? item.routeTo ?? null : null, preferredDate: item.applyForTicket ? item.preferredDate ?? null : null, remarks: item.remarks || null };
-      if (matchIndex >= 0) { const [previous] = remainingPrior.splice(matchIndex, 1); await tx.update(monthlyPlanItems).set(values).where(eq(monthlyPlanItems.id, previous.id)); }
+      if (previous) await tx.update(monthlyPlanItems).set(values).where(eq(monthlyPlanItems.id, previous.id));
       else await tx.insert(monthlyPlanItems).values({ planId, ...values });
     }
     return { id: planId, empCode: employee.empCode, employeeName: employee.employeeName, planMonth: input.planMonth, version, status: "Submitted" as const };

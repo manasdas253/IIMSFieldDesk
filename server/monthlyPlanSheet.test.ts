@@ -93,4 +93,21 @@ describe("monthly plan sheet renderers", () => {
     expect(workbook.getWorksheet("Instructions")).toBeDefined();
     expect(workbook.getWorksheet("Lists")?.state).toBe("veryHidden");
   });
+  it("prefills and locks past plan rows while leaving future rows blank and editable", async () => {
+    const saved = { plannedDate: "2026-10-01", customerName: "Alpha Mining", location: "Hyderabad", purpose: "Service" as const, applyForTicket: false, travelMode: null, routeFrom: null, routeTo: null, preferredDate: null, remarks: "Quarterly visit" };
+    const buffer = await renderMonthlyPlanTemplate("2026-10", [{ empCode: "SAMPLE01", employeeName: "Sample Employee", designation: "Sales", department: "Field" }], [], { today: "2026-10-17", planVersion: 7, items: [saved] });
+    const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(buffer);
+    const sheet = workbook.getWorksheet("SAMPLE01");
+    expect(sheet?.getCell("C6").value).toBeInstanceOf(Date);
+    expect(sheet?.getCell("E6").value).toBe("Alpha Mining");
+    expect(sheet?.getCell("E6").protection?.locked ?? true).toBe(true);
+    expect(sheet?.getCell("E6").fill).toMatchObject({ fgColor: { argb: "FFE5E5E5" } });
+    expect(sheet?.getCell("C7").value).toBeInstanceOf(Date);
+    expect(sheet?.getCell("E7").value).toBeNull();
+    expect(sheet?.getCell("E7").protection.locked).toBe(false);
+    expect(sheet?.getCell("G7").dataValidation.type).toBe("list");
+    expect(workbook.getWorksheet("_FieldDeskMetadata")?.getCell("B1").value).toBe("change");
+    expect(workbook.getWorksheet("_FieldDeskMetadata")?.getCell("B2").value).toBe("2026-10-17");
+    expect(workbook.getWorksheet("_FieldDeskMetadata")?.getCell("B3").value).toBe(7);
+  });
 });

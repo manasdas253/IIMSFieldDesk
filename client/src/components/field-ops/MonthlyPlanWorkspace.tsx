@@ -1,11 +1,12 @@
 import ExcelJS from "exceljs";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AlertTriangle, Download, FileSpreadsheet, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
 
 type UploadRow = { rowNumber: number; fields: Record<string, unknown> };
+type TemplateMetadata = { templateType: "change"; downloadedOn: string; basePlanVersion: number } | null;
 const dateIso = (value: unknown): string => {
   if (value instanceof Date && !Number.isNaN(value.valueOf())) return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, "0")}-${String(value.getUTCDate()).padStart(2, "0")}`;
   if (typeof value === "number" && Number.isFinite(value)) { const date = new Date(Date.UTC(1899, 11, 30) + value * 86400000); return dateIso(date); }
@@ -33,6 +34,7 @@ const readPlanFields = (sheet: ExcelJS.Worksheet, row: ExcelJS.Row, selectedMont
   };
 };
 const monthNow = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit" }).format(new Date());
+const indiaToday = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 
 export default function MonthlyPlanWorkspace() {
   const user = useCurrentUser();
@@ -41,13 +43,22 @@ export default function MonthlyPlanWorkspace() {
 
 function EmployeeMonthlyPlan() {
   const user = useCurrentUser();
+  const todayIndia = indiaToday();
   const [month, setMonth] = useState(monthNow);
   const [rows, setRows] = useState<UploadRow[]>([]);
   const [fileName, setFileName] = useState("");
+  const [templateMetadata, setTemplateMetadata] = useState<TemplateMetadata>(null);
   const [busyDownload, setBusyDownload] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const utils = trpc.useUtils();
   const plan = trpc.fieldOps.monthlyPlans.list.useQuery({ month });
+  const changeInfo = trpc.fieldOps.monthlyPlans.changeInfo.useQuery({ month });
+  const monthEnd = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10);
+  const holidays = trpc.fieldOps.holidays.list.useQuery({ from: `${month}-01`, to: monthEnd });
+  const currentPlan = plan.data?.find(row => row.empCode === user?.empCode);
+  const changeMode = currentPlan?.status === "Submitted";
+  const monthOver = month < monthNow;
+  const monthDays = useMemo(() => Array.from({ length: new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate() }, (_, index) => `${month}-${String(index + 1).padStart(2, "0")}`), [month]);
   const validateUpload = trpc.fieldOps.monthlyPlans.validateUpload.useMutation();
   const validation = validateUpload.data;
   const submit = trpc.fieldOps.monthlyPlans.submit.useMutation({ onSuccess: async () => { await utils.invalidate(); setRows([]); setFileName(""); validateUpload.reset(); toast.success("Your monthly plan was submitted"); }, onError: error => toast.error(error.message) });
@@ -55,16 +66,22 @@ function EmployeeMonthlyPlan() {
     if (!user?.empCode || busyDownload) return;
     setBusyDownload(true);
     try {
-      const response = await fetch(`/api/exports/monthly-plan-template.xlsx?${new URLSearchParams({ month, empCode: user.empCode })}`);
+      const params = new URLSearchParams({ month, empCode: user.empCode, ...(changeMode ? { mode: "change" } : {}) });
+      const response = await fetch(`/api/exports/monthly-plan-template.xlsx?${params}`);
       if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || "Couldn?t generate the template."); }
       const blob = await response.blob(); const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = `Monthly_Plan_Input_${month}_${user.empCode}.xlsx`; anchor.click(); URL.revokeObjectURL(url); toast.success("Your monthly plan template was downloaded");
     } catch (error) { toast.error(error instanceof Error ? error.message : "Template download failed."); }
     finally { setBusyDownload(false); }
   };
   const readWorkbook = async (file: File) => {
-    setFileName(file.name); setRows([]); validateUpload.reset();
+    setFileName(file.name); setRows([]); setTemplateMetadata(null); validateUpload.reset();
     try {
       const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(await file.arrayBuffer());
+      const metadataSheet = workbook.getWorksheet("_FieldDeskMetadata");
+      const templateType = text(metadataSheet?.getCell("B1").value).trim();
+      const downloadedOn = text(metadataSheet?.getCell("B2").value).trim();
+      const basePlanVersion = Number(text(metadataSheet?.getCell("B3").value));
+      setTemplateMetadata(templateType === "change" && downloadedOn && Number.isInteger(basePlanVersion) ? { templateType: "change", downloadedOn, basePlanVersion } : null);
       const parsed: UploadRow[] = [];
       workbook.worksheets.forEach(sheet => {
         if (text(sheet.getCell("A5").value) !== "Emp Code") return;
@@ -81,19 +98,19 @@ function EmployeeMonthlyPlan() {
       setRows(parsed); toast.success(`${parsed.length} filled row${parsed.length === 1 ? "" : "s"} read from ${file.name}`);
     } catch (error) { toast.error(error instanceof Error ? error.message : "Couldn?t read this workbook."); }
   };
-  const checkRows = async () => { if (!rows.length) return; try { await validateUpload.mutateAsync({ month, rows }); } catch (error) { toast.error(error instanceof Error ? error.message : "Upload validation failed."); } };
+  const checkRows = async () => { if (!rows.length) return; try { await validateUpload.mutateAsync({ month, rows, ...(templateMetadata ?? {}) }); } catch (error) { toast.error(error instanceof Error ? error.message : "Upload validation failed."); } };
   const submitValid = async () => {
     if (!user?.empCode || !validation?.validRows.length || validation.errors.length || validation.validRows.some(row => row.empCode !== user.empCode)) return;
     if (plan.data?.length && !window.confirm(`A plan already exists for ${month}. Submitting will replace your current plan. Continue?`)) return;
     setSubmitting(true);
-    try { await submit.mutateAsync({ empCode: user.empCode, planMonth: month, items: validation.validRows.map(row => row.item) }); }
+    try { await submit.mutateAsync({ empCode: user.empCode, planMonth: month, items: validation.validRows.map(row => row.item), ...(templateMetadata ?? {}) }); }
     catch (error) { toast.error(error instanceof Error ? error.message : "Could not submit your plan."); }
     finally { setSubmitting(false); }
   };
   return <div className="view-stack monthly-plan-workspace"><div className="page-heading"><div><p className="eyebrow">WORKSPACE ? MONTHLY PLANNING</p><h1>My monthly plan.</h1><p className="page-subtitle">Download your Excel template, fill in your planned visits, then upload it for validation.</p></div><div className="report-icon"><FileSpreadsheet size={20} /></div></div>
-    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">STEP 1 ? YOUR TEMPLATE</p><h2>Choose the planning month</h2></div></div><div className="plan-sheet-controls"><label className="filter-select"><span>Plan month</span><input type="month" value={month} onChange={event => { setMonth(event.target.value); setRows([]); validateUpload.reset(); }} /></label></div><div className="plan-sheet-downloads"><button className="button button-primary" disabled={!user?.empCode || busyDownload} onClick={() => void downloadTemplate()}><Download size={16} />{busyDownload ? "Preparing?" : "Download my Excel template"}</button></div><p className="page-subtitle">This workbook contains only your employee details. Keep them unchanged while filling your planned visits.</p></section>
+    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">STEP 1 ? YOUR TEMPLATE</p><h2>{changeMode ? "Change my plan" : "Choose the planning month"}</h2></div></div>{monthOver && !changeMode && <p className="plan-sheet-not-submitted">This month is over. Nothing can be changed.</p>}<div className="plan-sheet-controls"><label className="filter-select"><span>Plan month</span><input type="month" value={month} onChange={event => { setMonth(event.target.value); setRows([]); setTemplateMetadata(null); validateUpload.reset(); }} /></label></div>{changeMode && <><p className="plan-sheet-not-submitted">{monthOver ? "This month is over. Nothing can be changed." : `Days before ${new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", timeZone: "UTC" }).format(new Date(`${todayIndia}T00:00:00Z`))} are locked. You can change ${new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", timeZone: "UTC" }).format(new Date(`${todayIndia}T00:00:00Z`))} and later days.`}</p><div className="table-scroll"><table className="data-table"><thead><tr><th>Day</th><th>Status</th></tr></thead><tbody>{monthDays.map(day => { const weekday = new Date(`${day}T00:00:00Z`).getUTCDay(); const holiday = holidays.data?.find(item => item.holidayDate === day); const status = weekday === 0 ? "Sunday" : holiday ? "Holiday" : (day < todayIndia || changeInfo.data?.answeredDates.includes(day)) ? "Locked" : "Can change"; return <tr key={day}><td>{new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${day}T00:00:00Z`))}</td><td>{status}</td></tr>; })}</tbody></table></div></>}{!changeMode && <p className="page-subtitle">This workbook contains only your employee details. Keep them unchanged while filling your planned visits.</p>}<div className="plan-sheet-downloads"><button className="button button-primary" disabled={!user?.empCode || busyDownload || plan.isLoading || monthOver} onClick={() => void downloadTemplate()}><Download size={16} />{busyDownload ? "Preparing?" : changeMode ? "Download template with my current plan" : "Download my Excel template"}</button></div></section>
     <section className="panel"><div className="panel-heading"><div><p className="eyebrow">STEP 2 ? YOUR UPLOAD</p><h2>Upload your completed workbook</h2></div><span className="panel-chip"><Upload size={14} /> XLSX</span></div><label className="upload-drop"><Upload size={20} /><span><strong>{fileName || "Choose your completed FieldDesk template"}</strong><small>Only .xlsx files ? only your employee code will be accepted</small></span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => { const file = event.target.files?.[0]; if (file) void readWorkbook(file); event.currentTarget.value = ""; }} /></label><p className="page-subtitle">Fill one row for every working day. Enter a customer visit, “No Visit”, “Office”, or “Leave”; Sundays and company holidays are excluded.</p>{rows.length > 0 && <div className="plan-sheet-downloads"><button className="button button-secondary" disabled={validateUpload.isPending} onClick={() => void checkRows()}>{validateUpload.isPending ? "Validating?" : "Validate my rows"}</button><span className="panel-count">{rows.length} rows found</span></div>}
-      {validation && <div className="upload-validation"><div className={`upload-validation-summary ${validation.errors.length ? "has-errors" : "all-valid"}`}><strong>{validation.validCount} valid of {validation.totalRows} rows</strong><span>{validation.errors.length ? `${validation.errors.length} issue${validation.errors.length === 1 ? "" : "s"} need correction.` : "All rows are ready to submit."}</span></div>{validation.errors.length > 0 && <div className="upload-row-errors"><h3><AlertTriangle size={15} /> Fix the highlighted workbook rows and validate again</h3>{validation.errors.map((error, index) => <p key={`${error.rowNumber}-${error.field}-${index}`}>{error.rowNumber > 0 && <b>Row {error.rowNumber} ? {error.field} </b>}{error.message}</p>)}</div>}{validation.validRows.length > 0 && <div className="table-scroll"><table className="data-table"><thead><tr><th>Row</th><th>Planned date</th><th>Customer</th><th>Location</th><th>Purpose</th><th>Ticket</th></tr></thead><tbody>{validation.validRows.slice(0, 20).map(row => <tr key={`${row.rowNumber}-${row.empCode}`}><td>{row.rowNumber}</td><td>{row.item.plannedDate}</td><td>{row.item.customerName}</td><td>{row.item.location}</td><td>{row.item.purpose}</td><td>{row.item.applyForTicket ? "Yes" : "No"}</td></tr>)}</tbody></table></div>}{validation.errors.length === 0 && validation.validRows.length > 0 && <div className="plan-sheet-downloads"><button className="button button-primary" disabled={submitting} onClick={() => void submitValid()}>{submitting ? "Submitting?" : `Submit ${validation.validCount} row${validation.validCount === 1 ? "" : "s"}`}</button></div>}</div>}
+      {validation && <div className="upload-validation"><div className={`upload-validation-summary ${validation.errors.length ? "has-errors" : "all-valid"}`}><strong>{validation.validCount} valid of {validation.totalRows} rows</strong><span>{validation.errors.length ? `${validation.errors.length} issue${validation.errors.length === 1 ? "" : "s"} need correction.` : "All rows are ready to submit."}</span></div>{validation.lockedErrors?.length > 0 && <div className="upload-row-errors"><h3><AlertTriangle size={15} /> Past days can't be changed</h3><div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Saved plan</th><th>Your file</th></tr></thead><tbody>{validation.lockedErrors.map((error, index) => <tr key={`${error.date}-${index}`}><td>{error.date}</td><td>{error.savedPlan}</td><td>{error.filePlan}</td></tr>)}</tbody></table></div></div>}{validation.errors.filter(error => error.field !== "Past days").length > 0 && <div className="upload-row-errors"><h3><AlertTriangle size={15} /> Fix the highlighted workbook rows and validate again</h3>{validation.errors.filter(error => error.field !== "Past days").map((error, index) => <p key={`${error.rowNumber}-${error.field}-${index}`}>{error.rowNumber > 0 && <b>Row {error.rowNumber} ? {error.field} </b>}{error.message}</p>)}</div>}{validation.validRows.length > 0 && <div className="table-scroll"><table className="data-table"><thead><tr><th>Row</th><th>Planned date</th><th>Customer</th><th>Location</th><th>Purpose</th><th>Ticket</th></tr></thead><tbody>{validation.validRows.slice(0, 20).map(row => <tr key={`${row.rowNumber}-${row.empCode}`}><td>{row.rowNumber}</td><td>{row.item.plannedDate}</td><td>{row.item.customerName}</td><td>{row.item.location}</td><td>{row.item.purpose}</td><td>{row.item.applyForTicket ? "Yes" : "No"}</td></tr>)}</tbody></table></div>}{validation.errors.length === 0 && validation.validRows.length > 0 && <div className="plan-sheet-downloads"><button className="button button-primary" disabled={submitting} onClick={() => void submitValid()}>{submitting ? "Submitting?" : `Submit ${validation.validCount} row${validation.validCount === 1 ? "" : "s"}`}</button></div>}</div>}
     </section></div>;
 }
 
