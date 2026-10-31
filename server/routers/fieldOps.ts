@@ -1,9 +1,9 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { dailyVisitActionSchema, empCodeSchema, employeeInputSchema, employeeSetActiveSchema, employeeUpdateSchema, followUpInputSchema, followUpListSchema, holidayInputSchema, indiaDateString, monthSchema, monthlyPlanItemInputSchema, monthlyPlanSheetQuerySchema, monthlyPlanSubmitSchema, monthlyPlanUploadValidationSchema, nextMondayDate, planInputSchema, planListFilterSchema, planUpdateSchema, visitInputSchema, visitListFilterSchema, visitUpdateSchema } from "../../shared/fieldOps";
+import { dailyVisitActionSchema, empCodeSchema, employeeInputSchema, employeeSetActiveSchema, employeeUpdateSchema, followUpInputSchema, followUpListSchema, holidayInputSchema, indiaDateString, monthSchema, monthlyPlanDayEditSchema, monthlyPlanItemInputSchema, monthlyPlanSheetQuerySchema, monthlyPlanSubmitSchema, monthlyPlanUploadValidationSchema, nextMondayDate, planInputSchema, planListFilterSchema, planUpdateSchema, visitInputSchema, visitListFilterSchema, visitUpdateSchema } from "../../shared/fieldOps";
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import { countVisitsThrough, createPlan, createVisit, deletePlan, deleteVisit, getEmployeeNames, getPlan, getRecentVisits, getVisit, listPlans, listVisits, listVisitsThroughPage, updatePlan, updateVisit } from "../fieldOpsDb";
-import { cancelFollowUp, createEmployee, createFollowUp, createPlanHoliday, deletePlanHoliday, followUpDueSummary, getEmployeeForVisit, getFollowUp, getMonthlyPlanChangeState, listCompletedDailyVisits, listDailyVisitStatuses, listDailyVisitWorkload, listEmployeeDailyItems, saveDailyVisitAction, listEmployeeMaster, listFollowUps, listMonthlyPlanReport, listExecutiveMonthlyTravel, listPlanHolidays, markFollowUpDone, rescheduleFollowUp, setEmployeeActive, submitMonthlyPlan, updateEmployee } from "../fieldOpsV3Db";
+import { cancelFollowUp, createEmployee, createFollowUp, createPlanHoliday, deletePlanHoliday, editMonthlyPlanDays, followUpDueSummary, getEmployeeForVisit, getFollowUp, getMonthlyPlanChangeState, listCompletedDailyVisits, listDailyVisitStatuses, listDailyVisitWorkload, listEmployeeDailyItems, saveDailyVisitAction, listEmployeeMaster, listFollowUps, listMonthlyPlanReport, listExecutiveMonthlyTravel, listPlanHolidays, markFollowUpDone, rescheduleFollowUp, setEmployeeActive, submitMonthlyPlan, updateEmployee } from "../fieldOpsV3Db";
 import { checkLockedMonthlyPlanDays, MonthlyPlanChangeRejected } from "../monthlyPlanChange";
 import { loadMonthlyPlanSheetData } from "../exports/monthlyPlanSheet/buildData";
 
@@ -225,6 +225,11 @@ export const fieldOpsRouter = router({
     submit: protectedProcedure.input(monthlyPlanSubmitSchema).mutation(async ({ ctx, input }) => {
       try { return await submitMonthlyPlan({ ...input, empCode: ctx.user.role === "admin" ? input.empCode : ctx.user.empCode }, { enforceChange: ctx.user.role === "employee" }); }
       catch (error) { if (error instanceof MonthlyPlanChangeRejected) throw new TRPCError({ code: "BAD_REQUEST", message: error.message }); throw error; }
+    }),
+    editDays: protectedProcedure.input(monthlyPlanDayEditSchema).mutation(async ({ ctx, input }) => {
+      if (ctx.user.role !== "employee") throw new TRPCError({ code: "FORBIDDEN", message: "In-app plan edits are available to employees only." });
+      try { return await editMonthlyPlanDays(ctx.user.empCode, input.month, input.edits, indiaDateString()); }
+      catch (error) { throw new TRPCError({ code: "BAD_REQUEST", message: error instanceof Error ? error.message : "Could not save the plan changes." }); }
     }),
     list: protectedProcedure.input(z.object({ month: monthSchema, empCode: empCodeSchema.optional() })).query(({ ctx, input }) => listMonthlyPlanReport(input.month, ctx.user.role === "admin" ? input.empCode : ctx.user.empCode)),
   }),

@@ -57,6 +57,13 @@
       "when": 1793265571365,
       "tag": "0007_clammy_gargoyle",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1793440000000,
+      "tag": "0008_monthly_plan_history",
+      "breakpoints": true
     }
   ]
 }

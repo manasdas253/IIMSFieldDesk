@@ -1,9 +1,10 @@
 import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
-import { dailyVisitStatuses, employees, followUps, monthlyPlanItems, monthlyPlans, planHolidays, visits } from "../drizzle/schema";
-import { currentMonthlyPlanItems, indiaDateString, type EmployeeInput, type FollowUpInput, type MonthlyPlanItemInput, type MonthlyPlanSubmitInput, type dailyVisitActionSchema } from "../shared/fieldOps";
+import { dailyVisitStatuses, employees, followUps, monthlyPlanHistory, monthlyPlanItems, monthlyPlans, planHolidays, visits } from "../drizzle/schema";
+import { currentMonthlyPlanItems, indiaDateString, monthlyPlanItemInputSchema, type EmployeeInput, type FollowUpInput, type MonthlyPlanItemInput, type MonthlyPlanSubmitInput, type dailyVisitActionSchema } from "../shared/fieldOps";
 import { checkLockedMonthlyPlanDays, MonthlyPlanChangeRejected, takeMatchingPreviousPlanItem } from "./monthlyPlanChange";
 import type { z } from "zod";
 import { getDb } from "./db";
+import type { MonthlyPlanDayEditInput } from "../shared/fieldOps";
 
 export async function listEmployeeMaster(includeInactive = true) {
   const db = await getDb(); if (!db) throw new Error("Database is not available");
@@ -89,22 +90,75 @@ export async function submitMonthlyPlan(input: MonthlyPlanSubmitInput, options: 
     return { id: planId, empCode: employee.empCode, employeeName: employee.employeeName, planMonth: input.planMonth, version, status: "Submitted" as const };
   });
 }
+
+export async function editMonthlyPlanDays(empCode: string, month: string, edits: MonthlyPlanDayEditInput["edits"], today = indiaDateString()) {
+  const db = await getDb(); if (!db) throw new Error("Database is not available");
+  return db.transaction(async tx => {
+    const [plan] = await tx.select().from(monthlyPlans).where(and(eq(monthlyPlans.empCode, empCode), eq(monthlyPlans.planMonth, month), eq(monthlyPlans.status, "Submitted"))).limit(1);
+    if (!plan) throw new Error("Submit your monthly plan before editing individual days.");
+    const [savedRows, answers, holidays] = await Promise.all([
+      tx.select().from(monthlyPlanItems).where(and(eq(monthlyPlanItems.planId, plan.id), eq(monthlyPlanItems.version, plan.version))),
+      tx.select({ visitDate: dailyVisitStatuses.visitDate }).from(dailyVisitStatuses).where(and(eq(dailyVisitStatuses.empCode, empCode), gte(dailyVisitStatuses.visitDate, `${month}-01`), lte(dailyVisitStatuses.visitDate, `${month}-${String(new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate()).padStart(2, "0")}`), inArray(dailyVisitStatuses.status, ["Visited", "Missed", "Rescheduled"]))),
+      tx.select({ holidayDate: planHolidays.holidayDate }).from(planHolidays).where(and(gte(planHolidays.holidayDate, `${month}-01`), lte(planHolidays.holidayDate, `${month}-${String(new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate()).padStart(2, "0")}`))),
+    ]);
+    const answered = new Set(answers.map(row => row.visitDate));
+    const holidaySet = new Set(holidays.map(row => row.holidayDate));
+    const editedDates = new Set<string>();
+    const normalized = edits.map(edit => {
+      if (!edit.date.startsWith(`${month}-`)) throw new Error(`Date ${edit.date} is outside ${month}.`);
+      if (new Date(`${edit.date}T00:00:00Z`).toISOString().slice(0, 10) !== edit.date) throw new Error(`Date ${edit.date} is not a valid calendar date.`);
+      if (edit.date < today || answered.has(edit.date)) throw new Error(`${edit.date} is locked and cannot be edited.`);
+      const weekday = new Date(`${edit.date}T00:00:00Z`).getUTCDay();
+      if (weekday === 0 || holidaySet.has(edit.date)) throw new Error(`${edit.date} is a Sunday or configured holiday and cannot be edited.`);
+      if (editedDates.has(edit.date)) throw new Error(`Date ${edit.date} appears more than once.`);
+      editedDates.add(edit.date);
+      const oldValue = savedRows.filter(row => row.plannedDate === edit.date).map(row => toMonthlyPlanInput(row));
+      let newValue: MonthlyPlanItemInput;
+      if (edit.type === "Customer Visit") {
+        const priorVisit = oldValue[0];
+        const parsed = monthlyPlanItemInputSchema.safeParse({ plannedDate: edit.date, customerName: edit.customerName, location: edit.location, purpose: edit.purpose, applyForTicket: priorVisit?.applyForTicket ?? false, travelMode: priorVisit?.travelMode ?? null, routeFrom: priorVisit?.routeFrom ?? null, routeTo: priorVisit?.routeTo ?? null, preferredDate: priorVisit?.preferredDate ?? null, remarks: edit.remarks });
+        if (!parsed.success) throw new Error(parsed.error.issues.map(issue => `${issue.path.join(".")}: ${issue.message}`).join("; "));
+        newValue = parsed.data;
+      } else {
+        const label = edit.type;
+        newValue = { plannedDate: edit.date, customerName: label, location: "—", purpose: "Other", applyForTicket: false, travelMode: null, routeFrom: null, routeTo: null, preferredDate: null, remarks: label };
+      }
+      const newValues = edit.type === "Customer Visit" ? [newValue, ...oldValue.slice(1)] : [newValue];
+      return { edit, oldValue, newValue: newValues };
+    });
+    const nextItems: MonthlyPlanItemInput[] = savedRows.filter(row => !editedDates.has(row.plannedDate)).map(toMonthlyPlanInput);
+    nextItems.push(...normalized.flatMap(row => row.newValue));
+    const nextVersion = plan.version + 1;
+    await tx.update(monthlyPlans).set({ version: nextVersion, employeeName: plan.employeeName, status: "Submitted" }).where(eq(monthlyPlans.id, plan.id));
+    for (const item of nextItems) await tx.insert(monthlyPlanItems).values({ planId: plan.id, version: nextVersion, plannedDate: item.plannedDate, customerName: item.customerName, location: item.location, purpose: item.purpose, applyForTicket: item.applyForTicket, travelMode: item.travelMode ?? null, routeFrom: item.routeFrom ?? null, routeTo: item.routeTo ?? null, preferredDate: item.preferredDate ?? null, remarks: item.remarks || null });
+    for (const row of normalized) await tx.insert(monthlyPlanHistory).values({ planId: plan.id, empCode, planDate: row.edit.date, oldValue: JSON.stringify(row.oldValue), newValue: JSON.stringify(row.newValue) });
+    return { planId: plan.id, version: nextVersion, updatedDates: [...editedDates] };
+  });
+}
 export async function listMonthlyPlanReport(month: string, empCode?: string) {
   const db = await getDb(); if (!db) throw new Error("Database is not available");
   const roster = await db.select().from(employees).where(empCode ? eq(employees.empCode, empCode) : undefined).orderBy(asc(employees.empCode));
   if (!roster.length) return [];
   const plans = await db.select().from(monthlyPlans).where(and(eq(monthlyPlans.planMonth, month), empCode ? eq(monthlyPlans.empCode, empCode) : undefined));
   const planIds = plans.map(plan => plan.id);
-  const allItems = planIds.length ? await db.select().from(monthlyPlanItems).where(inArray(monthlyPlanItems.planId, planIds)).orderBy(asc(monthlyPlanItems.plannedDate), asc(monthlyPlanItems.id)) : [];
+  const [allItems, historyRows] = await Promise.all([
+    planIds.length ? db.select().from(monthlyPlanItems).where(inArray(monthlyPlanItems.planId, planIds)).orderBy(asc(monthlyPlanItems.plannedDate), asc(monthlyPlanItems.id)) : Promise.resolve([]),
+    planIds.length ? db.select().from(monthlyPlanHistory).where(inArray(monthlyPlanHistory.planId, planIds)).orderBy(asc(monthlyPlanHistory.changedAt)) : Promise.resolve([]),
+  ]);
   const items = plans.flatMap(plan => currentMonthlyPlanItems(allItems.filter(item => item.planId === plan.id), plan.version));
   const planByCode = new Map(plans.map(plan => [plan.empCode, plan]));
+  const historyByPlan = new Map<number, typeof historyRows>();
+  historyRows.forEach(row => historyByPlan.set(row.planId, [...(historyByPlan.get(row.planId) ?? []), row]));
   const itemsByPlan = new Map<number, typeof items>();
   items.forEach(item => itemsByPlan.set(item.planId, [...(itemsByPlan.get(item.planId) ?? []), item]));
   return roster.map(employee => {
     const plan = planByCode.get(employee.empCode);
     const planItems = plan ? itemsByPlan.get(plan.id) ?? [] : [];
     const visitItems = planItems.filter(item => !["no visit", "office", "leave"].includes(item.customerName.trim().toLocaleLowerCase("en-IN")));
-    return { empCode: employee.empCode, name: employee.employeeName, month, status: plan?.status ?? "Not submitted", version: plan?.version ?? 0, plannedVisits: visitItems.length, distinctCustomers: new Set(visitItems.map(item => item.customerName.trim().toLocaleLowerCase("en-IN"))).size, ticketsRequested: planItems.filter(item => item.applyForTicket).length, planItems, plan };
+    const planHistory = plan ? historyByPlan.get(plan.id) ?? [] : [];
+    const lastModifiedAt = planHistory.at(-1)?.changedAt ?? plan?.updatedAt ?? null;
+    const modifiedMidMonth = planHistory.length > 0;
+    return { empCode: employee.empCode, name: employee.employeeName, month, status: plan?.status ?? "Not submitted", version: plan?.version ?? 0, plannedVisits: visitItems.length, distinctCustomers: new Set(visitItems.map(item => item.customerName.trim().toLocaleLowerCase("en-IN"))).size, ticketsRequested: planItems.filter(item => item.applyForTicket).length, planItems, plan, lastModifiedAt, modifiedMidMonth, history: planHistory.map(row => ({ id: row.id, empCode: row.empCode, changedAt: row.changedAt, planDate: row.planDate, oldValue: row.oldValue, newValue: row.newValue })) };
   });
 }
 

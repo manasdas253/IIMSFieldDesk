@@ -63,7 +63,7 @@ function Sidebar({ view, setView, items }: { view: View; setView: (value: View) 
       </div>
       <div className="nav-group"><span className="nav-label">WORKSPACE</span>{items.filter(item => item.group === "workspace").map(item => <NavButton key={item.id} item={item} active={view === item.id} setView={setView} />)}</div>
       {items.some(item => item.group === "insights") && <div className="nav-group insight-group"><span className="nav-label">REPORTS & INSIGHTS</span>{items.filter(item => item.group === "insights").map(item => <NavButton key={item.id} item={item} active={view === item.id} setView={setView} />)}</div>}
-      <div className="sidebar-bottom"><div className="sidebar-route"><div className="route-icon"><Compass size={17} /></div><div><strong>Keep the route clear.</strong><small>Every stop tells a story.</small></div></div><div className="sidebar-footer" title="Phase 1 · No sign-in required"><span className="online-dot" />Phase 1 · No sign-in required</div></div>
+      <div className="sidebar-bottom"><div className="sidebar-route"><div className="route-icon"><Compass size={17} /></div><div><strong>Keep the route clear.</strong><small>Every stop tells a story.</small></div></div></div>
     </aside>
   );
 }

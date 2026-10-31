@@ -128,6 +128,16 @@ export const monthlyPlanItems = mysqlTable("monthly_plan_items", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, table => [index("monthly_items_plan_date_idx").on(table.planId, table.plannedDate)]);
 
+export const monthlyPlanHistory = mysqlTable("monthly_plan_history", {
+  id: int("id").autoincrement().primaryKey(),
+  planId: int("planId").notNull().references(() => monthlyPlans.id, { onDelete: "cascade" }),
+  empCode: varchar("empCode", { length: 20 }).notNull(),
+  planDate: date("planDate", { mode: "string" }).notNull(),
+  changedAt: timestamp("changedAt").defaultNow().notNull(),
+  oldValue: text("oldValue").notNull(),
+  newValue: text("newValue").notNull(),
+}, table => [index("monthly_plan_history_plan_idx").on(table.planId), index("monthly_plan_history_employee_idx").on(table.empCode)]);
+
 export const followUps = mysqlTable("follow_ups", {
   id: int("id").autoincrement().primaryKey(),
   visitId: int("visitId").notNull().references(() => visits.id, { onDelete: "cascade" }),

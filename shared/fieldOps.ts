@@ -138,6 +138,18 @@ export const monthlyPlanSubmitSchema = z.object({
   downloadedOn: dateOnly.optional(),
   basePlanVersion: z.number().int().nonnegative().optional(),
 });
+export const monthlyPlanDayEditSchema = z.object({
+  month: monthSchema,
+  edits: z.array(z.object({
+    date: dateOnly,
+    type: z.enum(["Customer Visit", "No Visit", "Office", "Leave"]),
+    customerName: z.string().trim().max(180).optional().default(""),
+    location: z.string().trim().max(160).optional().default(""),
+    purpose: z.enum(VISIT_PURPOSES).optional().default("Other"),
+    remarks: z.string().max(4000).optional().default(""),
+  })).min(1).max(31),
+});
+export type MonthlyPlanDayEditInput = z.infer<typeof monthlyPlanDayEditSchema>;
 export const monthlyPlanSheetQuerySchema = z.object({
   month: monthSchema,
   empCode: z.union([empCodeSchema, z.literal("ALL")]),
