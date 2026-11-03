@@ -21,6 +21,7 @@ export const employees = mysqlTable("employees", {
   designation: varchar("designation", { length: 120 }),
   department: varchar("department", { length: 120 }),
   mobile: varchar("mobile", { length: 32 }),
+  officialWorkEmail: varchar("officialWorkEmail", { length: 320 }),
   role: mysqlEnum("role", ["employee", "admin"]).notNull().default("employee"),
   passwordHash: varchar("passwordHash", { length: 255 }),
   mustChangePassword: boolean("mustChangePassword").notNull().default(true),
@@ -28,7 +29,7 @@ export const employees = mysqlTable("employees", {
   isActive: boolean("isActive").notNull().default(true),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, table => [uniqueIndex("employees_empCode_uq").on(table.empCode), index("employees_active_idx").on(table.isActive)]);
+}, table => [uniqueIndex("employees_empCode_uq").on(table.empCode), uniqueIndex("employees_official_work_email_uq").on(table.officialWorkEmail), index("employees_active_idx").on(table.isActive)]);
 
 export const visits = mysqlTable("field_visits", {
   id: int("id").autoincrement().primaryKey(),
@@ -154,6 +155,35 @@ export const followUps = mysqlTable("follow_ups", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, table => [index("followups_emp_date_status_idx").on(table.empCode, table.followUpDate, table.status)]);
 
+export const dailyEmailNotifications = mysqlTable("daily_email_notifications", {
+  id: int("id").autoincrement().primaryKey(),
+  employeeId: int("employeeId").notNull().references(() => employees.id, { onDelete: "restrict" }),
+  employeeCode: varchar("employeeCode", { length: 20 }).notNull(),
+  employeeName: varchar("employeeName", { length: 120 }).notNull(),
+  employeeEmail: varchar("employeeEmail", { length: 320 }).notNull(),
+  notificationDate: date("notificationDate", { mode: "string" }).notNull(),
+  emailSubject: varchar("emailSubject", { length: 255 }).notNull(),
+  scheduledVisitCount: int("scheduledVisitCount").notNull().default(0),
+  rescheduledVisitCount: int("rescheduledVisitCount").notNull().default(0),
+  followUpCount: int("followUpCount").notNull().default(0),
+  overdueFollowUpCount: int("overdueFollowUpCount").notNull().default(0),
+  resendMessageId: varchar("resendMessageId", { length: 255 }),
+  deliveryStatus: mysqlEnum("deliveryStatus", ["Processing", "Sent", "Failed", "Resent"]).notNull().default("Processing"),
+  attemptType: mysqlEnum("attemptType", ["Automatic", "Manual", "Test"]).notNull().default("Automatic"),
+  idempotencyKey: varchar("idempotencyKey", { length: 128 }),
+  parentNotificationId: int("parentNotificationId"),
+  htmlSnapshot: text("htmlSnapshot"),
+  errorDetails: text("errorDetails"),
+  sentAt: timestamp("sentAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex("daily_email_notifications_idempotency_uq").on(table.idempotencyKey),
+  index("daily_email_notifications_date_idx").on(table.notificationDate),
+  index("daily_email_notifications_employee_date_idx").on(table.employeeId, table.notificationDate),
+  index("daily_email_notifications_parent_idx").on(table.parentNotificationId),
+]);
+
 export const planHolidays = mysqlTable("plan_holidays", {
   id: int("id").autoincrement().primaryKey(),
   holidayDate: date("holidayDate", { mode: "string" }).notNull(),
@@ -180,4 +210,5 @@ export type Employee = typeof employees.$inferSelect;
 export type MonthlyPlan = typeof monthlyPlans.$inferSelect;
 export type MonthlyPlanItem = typeof monthlyPlanItems.$inferSelect;
 export type FollowUp = typeof followUps.$inferSelect;
+export type DailyEmailNotification = typeof dailyEmailNotifications.$inferSelect;
 export type PlanHoliday = typeof planHolidays.$inferSelect;

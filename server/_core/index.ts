@@ -9,10 +9,12 @@ import { registerMonthlyPlanExportRoutes } from "../exports/monthlyPlanSheet/rou
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { bootstrapAdmin } from "./employeeAuth";
+import { startDailyEmailScheduler } from "../dailyEmailScheduler";
 
 async function startServer() {
   if (!process.env.AUTH_SECRET || process.env.AUTH_SECRET.length < 32) throw new Error("Set AUTH_SECRET in .env (32+ characters). See .env.example.");
   await bootstrapAdmin();
+  startDailyEmailScheduler();
   const app = express();
   const server = createServer(app);
   app.use(express.json({ limit: "50mb" }));

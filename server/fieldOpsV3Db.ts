@@ -11,9 +11,18 @@ export async function listEmployeeMaster(includeInactive = true) {
   const rows = await db.select().from(employees).where(includeInactive ? undefined : eq(employees.isActive, true)).orderBy(asc(employees.empCode));
   return rows.map(({ passwordHash: _passwordHash, ...row }) => row);
 }
+async function ensureUniqueOfficialWorkEmail(email: string, excludeId?: number) {
+  const db = await getDb(); if (!db) throw new Error("Database is not available");
+  const rows = await db.select({ id: employees.id, officialWorkEmail: employees.officialWorkEmail }).from(employees);
+  const normalized = email.trim().toLocaleLowerCase("en");
+  if (rows.some(row => row.id !== excludeId && row.officialWorkEmail?.trim().toLocaleLowerCase("en") === normalized)) {
+    throw new Error("OFFICIAL_WORK_EMAIL_ALREADY_EXISTS");
+  }
+}
 export async function createEmployee(input: EmployeeInput) {
   const db = await getDb(); if (!db) throw new Error("Database is not available");
-  await db.insert(employees).values({ ...input, empCode: input.empCode.trim().toUpperCase(), designation: input.designation || null, department: input.department || null, mobile: input.mobile || null });
+  await ensureUniqueOfficialWorkEmail(input.officialWorkEmail);
+  await db.insert(employees).values({ ...input, empCode: input.empCode.trim().toUpperCase(), officialWorkEmail: input.officialWorkEmail.trim().toLocaleLowerCase("en"), designation: input.designation || null, department: input.department || null, mobile: input.mobile || null });
   const [row] = await db.select().from(employees).where(eq(employees.empCode, input.empCode.trim().toUpperCase())).limit(1);
   if (!row) return row;
   const { passwordHash: _passwordHash, ...safe } = row;
@@ -21,7 +30,8 @@ export async function createEmployee(input: EmployeeInput) {
 }
 export async function updateEmployee(id: number, input: EmployeeInput) {
   const db = await getDb(); if (!db) throw new Error("Database is not available");
-  await db.update(employees).set({ ...input, empCode: input.empCode.trim().toUpperCase(), designation: input.designation || null, department: input.department || null, mobile: input.mobile || null }).where(eq(employees.id, id));
+  await ensureUniqueOfficialWorkEmail(input.officialWorkEmail, id);
+  await db.update(employees).set({ ...input, empCode: input.empCode.trim().toUpperCase(), officialWorkEmail: input.officialWorkEmail.trim().toLocaleLowerCase("en"), designation: input.designation || null, department: input.department || null, mobile: input.mobile || null }).where(eq(employees.id, id));
   const [row] = await db.select().from(employees).where(eq(employees.id, id)).limit(1);
   if (!row) return null;
   const { passwordHash: _passwordHash, ...safe } = row;

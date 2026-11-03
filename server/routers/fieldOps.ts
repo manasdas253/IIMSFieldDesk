@@ -6,6 +6,7 @@ import { countVisitsThrough, createPlan, createVisit, deletePlan, deleteVisit, g
 import { cancelFollowUp, createEmployee, createFollowUp, createPlanHoliday, deletePlanHoliday, editMonthlyPlanDays, followUpDueSummary, getEmployeeForVisit, getFollowUp, getMonthlyPlanChangeState, listCompletedDailyVisits, listDailyVisitStatuses, listDailyVisitWorkload, listEmployeeDailyItems, saveDailyVisitAction, listEmployeeMaster, listFollowUps, listMonthlyPlanReport, listExecutiveMonthlyTravel, listPlanHolidays, markFollowUpDone, rescheduleFollowUp, setEmployeeActive, submitMonthlyPlan, updateEmployee } from "../fieldOpsV3Db";
 import { checkLockedMonthlyPlanDays, MonthlyPlanChangeRejected } from "../monthlyPlanChange";
 import { loadMonthlyPlanSheetData } from "../exports/monthlyPlanSheet/buildData";
+import { listDailyEmailHistory, resendFailedDailyEmail, sendTestDailyEmail } from "../dailyEmailService";
 
 const dateRangeSchema = z.object({ from: z.string().optional(), to: z.string().optional(), employeeName: z.string().optional() });
 const sameName = (a: string) => a.trim().toLocaleLowerCase();
@@ -15,8 +16,17 @@ function requireRow<T>(row: T | null, label: string): T {
   if (!row) throw new TRPCError({ code: "NOT_FOUND", message: `${label} was not found.` });
   return row;
 }
+function errorText(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  return `${error.message} ${error.cause ? errorText(error.cause) : ""}`;
+}
 
 export const fieldOpsRouter = router({
+  emailNotifications: router({
+    history: adminProcedure.input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), employeeId: z.number().int().positive().optional(), limit: z.number().int().min(1).max(500).optional() }).optional()).query(({ input }) => listDailyEmailHistory(input ?? {})),
+    test: adminProcedure.input(z.object({ empCode: empCodeSchema, testEmail: z.string().trim().email().max(320) })).mutation(({ input }) => sendTestDailyEmail(input.empCode, input.testEmail)),
+    resendFailed: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => resendFailedDailyEmail(input.id)),
+  }),
   employeeNames: adminProcedure.query(async () => getEmployeeNames()),
   employees: router({
     list: protectedProcedure.input(z.object({ includeInactive: z.boolean().optional() }).optional()).query(async ({ ctx, input }) => {
@@ -24,11 +34,11 @@ export const fieldOpsRouter = router({
       return rows.filter(row => ctx.user.role === "admin" || row.empCode === ctx.user.empCode);
     }),
     create: adminProcedure.input(employeeInputSchema).mutation(async ({ input }) => {
-      try { return await createEmployee(input); } catch (error) { throw new TRPCError({ code: "CONFLICT", message: "That Emp Code already exists.", cause: error }); }
+      try { return await createEmployee(input); } catch (error) { const duplicateEmail = errorText(error).includes("OFFICIAL_WORK_EMAIL_ALREADY_EXISTS") || errorText(error).includes("employees_official_work_email_uq"); throw new TRPCError({ code: "CONFLICT", message: duplicateEmail ? "That official work email already exists." : "That Emp Code already exists.", cause: error }); }
     }),
     update: adminProcedure.input(employeeUpdateSchema).mutation(async ({ input }) => {
       const { id, ...fields } = input;
-      try { return requireRow(await updateEmployee(id, fields), "Employee"); } catch (error) { if (error instanceof TRPCError) throw error; throw new TRPCError({ code: "CONFLICT", message: "That Emp Code already exists.", cause: error }); }
+      try { return requireRow(await updateEmployee(id, fields), "Employee"); } catch (error) { if (error instanceof TRPCError) throw error; const duplicateEmail = errorText(error).includes("OFFICIAL_WORK_EMAIL_ALREADY_EXISTS") || errorText(error).includes("employees_official_work_email_uq"); throw new TRPCError({ code: "CONFLICT", message: duplicateEmail ? "That official work email already exists." : "That Emp Code already exists.", cause: error }); }
     }),
     setActive: adminProcedure.input(employeeSetActiveSchema).mutation(async ({ ctx, input }) => {
       if (!input.isActive && input.empCode.toUpperCase() === ctx.user?.empCode) throw new TRPCError({ code: "BAD_REQUEST", message: "You cannot deactivate your own account." });

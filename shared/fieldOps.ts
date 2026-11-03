@@ -109,6 +109,7 @@ export const employeeInputSchema = z.object({
   designation: z.string().trim().max(120).optional().default(""),
   department: z.string().trim().max(120).optional().default(""),
   mobile: z.string().trim().max(32).optional().default(""),
+  officialWorkEmail: z.string().trim().toLowerCase().email("Enter a valid official work email.").max(320),
 });
 export const employeeUpdateSchema = employeeInputSchema.extend({ id: z.number().int().positive() });
 export const employeeSetActiveSchema = z.object({ empCode: empCodeSchema, isActive: z.boolean() });

@@ -64,6 +64,20 @@
       "when": 1793440000000,
       "tag": "0008_monthly_plan_history",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1793700000000,
+      "tag": "0009_employee_official_work_email",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1793703600000,
+      "tag": "0010_daily_email_notifications",
+      "breakpoints": true
     }
   ]
 }

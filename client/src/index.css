@@ -459,6 +459,24 @@ button:not(:disabled),select:not(:disabled),input[type=checkbox] { cursor:pointe
 .filter-select select { min-width:180px; }
 .filter-select input[type="date"] { height:34px; min-width:180px; border:1px solid var(--color-e8e6df); border-radius:8px; background:var(--color-fffefa); color:var(--color-555f56); padding:0 10px; outline:none; font-size:10px; }
 .filter-select input[type="date"]:focus { border-color:var(--color-d89b7e); }
+.email-test-form { align-items:flex-end; }
+.email-test-form .filter-select { flex:1;min-width:210px; }
+.email-test-form .filter-select input { height:34px;border:1px solid var(--color-e8e6df);border-radius:8px;background:var(--color-fffefa);color:var(--color-555f56);padding:0 10px;font-size:10px; }
+.email-test-form .button { min-height:36px; }
+.email-help { margin:9px 0 0;font-size:11px; }
+.email-history-filters { margin-bottom:14px; }
+.email-history-filters label { display:flex;align-items:center;gap:10px; }
+.email-history-filters .filter-label { margin:0; }
+.email-history-view .data-table { min-width:1080px; }
+.email-history-view .data-table td small { display:block;margin-top:3px;color:#8e9088;font-size:10px; }
+.email-history-view .status-pill { display:inline-flex;padding:4px 8px;border-radius:999px;background:#f0f1ef;color:#60675e;font-size:10px;font-weight:700; }
+.email-history-view .status-pill.sent,.email-history-view .status-pill.resent { background:#e7f4ec;color:#27754a; }
+.email-history-view .status-pill.failed { background:#fdeceb;color:#a13a34; }
+.email-history-view .status-pill.processing { background:#fff3dc;color:#8b5c12; }
+.email-error-cell { display:flex;align-items:flex-start;gap:8px;max-width:280px;color:#a13a34; }
+.email-error-cell>span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.email-resend { min-height:28px;padding:0 8px;white-space:nowrap; }
+@media (max-width:640px) { .email-test-form,.email-test-form .filter-select,.email-test-form .button { width:100%; }.email-history-filters label { width:100%;align-items:flex-start;flex-direction:column;gap:5px; }.email-history-filters select,.email-history-filters input { width:100%; } }
 .date-range { display:flex; gap:9px; }
 .date-range label { display:flex; flex-direction:column; gap:6px; }
 .date-range input { min-width:133px; }
