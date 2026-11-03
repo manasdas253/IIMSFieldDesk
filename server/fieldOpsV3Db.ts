@@ -330,7 +330,7 @@ export async function saveDailyVisitAction(input: DailyVisitAction & { empCode: 
 export async function listDailyVisitStatuses(filter: { from?: string; to?: string; empCode?: string }) {
   const db = await getDb(); if (!db) throw new Error("Database is not available");
   const conditions = [filter.empCode ? eq(dailyVisitStatuses.empCode, filter.empCode) : undefined, filter.from ? gte(dailyVisitStatuses.visitDate, filter.from) : undefined, filter.to ? lte(dailyVisitStatuses.visitDate, filter.to) : undefined].filter(Boolean);
-  const statusRows = or(eq(dailyVisitStatuses.status, "Missed"), eq(dailyVisitStatuses.status, "Rescheduled"), and(eq(dailyVisitStatuses.status, "Planned"), isNotNull(dailyVisitStatuses.parentStatusId))!, eq(dailyVisitStatuses.source, "Unplanned"))!;
+  const statusRows = or(eq(dailyVisitStatuses.status, "Visited"), eq(dailyVisitStatuses.status, "Missed"), eq(dailyVisitStatuses.status, "Rescheduled"), and(eq(dailyVisitStatuses.status, "Planned"), isNotNull(dailyVisitStatuses.parentStatusId))!, eq(dailyVisitStatuses.source, "Unplanned"))!;
   return db.select().from(dailyVisitStatuses).where(conditions.length ? and(...conditions, statusRows) : statusRows).orderBy(asc(dailyVisitStatuses.visitDate), asc(dailyVisitStatuses.id));
 }
 

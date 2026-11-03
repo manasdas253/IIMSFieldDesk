@@ -1641,6 +1641,30 @@ button:not(:disabled),select:not(:disabled),input[type=checkbox] { cursor:pointe
   .daily-action-form .form-bottom { align-items:stretch; flex-direction:column; }
   .daily-action-form .form-bottom .button { width:100%; justify-content:center; min-height:44px; }
 }
+.daily-action-form.is-unplanned { position:relative; overflow:hidden; gap:20px; padding:clamp(18px,2.5vw,28px); border:1px solid #e6e3dc; border-radius:18px; background:linear-gradient(145deg,#fff 0%,#fbfaf7 100%); box-shadow:0 12px 30px rgba(34,38,32,.07); }
+.daily-action-form.is-unplanned::before { position:absolute; inset:0 auto 0 0; width:4px; background:linear-gradient(180deg,#d71920,#f09a57); content:""; }
+.daily-action-form.is-unplanned>.panel-heading { padding-bottom:15px; border-bottom:1px solid #eeece6; }
+.daily-action-form.is-unplanned>.panel-heading>div { gap:6px; }
+.daily-action-form.is-unplanned h3 { color:#202522; font-size:clamp(18px,2vw,21px); letter-spacing:-.025em; }
+.daily-action-form.is-unplanned>.panel-heading .icon-button { flex:none; width:38px; height:38px; border:1px solid #e8e5de; border-radius:11px; background:#fff; }
+.daily-action-form.is-unplanned .unplanned-fields { grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+.daily-action-form.is-unplanned .form-field { gap:8px; }
+.daily-action-form.is-unplanned .field-label { color:#454a46; font-size:12px; font-weight:700; }
+.daily-action-form.is-unplanned .field-input { min-height:46px; border:1px solid #deded7; border-radius:11px; background:#fff; box-shadow:0 1px 2px rgba(25,30,25,.025); transition:border-color .15s ease,box-shadow .15s ease; }
+.daily-action-form.is-unplanned .field-input:focus { border-color:#c83239; box-shadow:0 0 0 3px rgba(215,25,32,.1); outline:0; }
+.daily-action-form.is-unplanned .daily-choice-row { padding-top:2px; }
+.daily-action-form.is-unplanned .daily-choice-row .button-primary { min-height:44px; padding-inline:18px; border-radius:11px; box-shadow:0 5px 12px rgba(186,21,30,.17); }
+.daily-action-form.is-unplanned .form-bottom { align-items:center; gap:14px; padding-top:17px; border-top:1px solid #eeece6; }
+.daily-action-form.is-unplanned .form-bottom>span { color:#707570; font-size:11px; line-height:1.5; }
+.daily-action-form.is-unplanned .form-bottom .button { min-height:46px; padding-inline:19px; border-radius:11px; box-shadow:0 5px 12px rgba(186,21,30,.16); }
+@media (max-width:900px) { .daily-action-form.is-unplanned .unplanned-fields { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:640px) {
+  .daily-action-form.is-unplanned { gap:17px; padding:17px 15px; border-radius:15px; }
+  .daily-action-form.is-unplanned>.panel-heading { align-items:flex-start; padding-bottom:13px; }
+  .daily-action-form.is-unplanned .unplanned-fields { grid-template-columns:minmax(0,1fr); gap:13px; }
+  .daily-action-form.is-unplanned .daily-choice-row .button { min-height:46px; }
+  .daily-action-form.is-unplanned .form-bottom { gap:10px; padding-top:14px; }
+}
 .personal-history article { display:flex; align-items:center; gap:13px; min-height:53px; padding:8px 4px; border-bottom:1px solid var(--line); }
 .personal-history article>div { flex:1; min-width:0; }
 .personal-history article strong,.personal-history article small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

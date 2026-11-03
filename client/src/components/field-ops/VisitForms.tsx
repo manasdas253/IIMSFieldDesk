@@ -115,6 +115,7 @@ function VisitEntryForm() {
     createVisit.mutate(parsed.data as VisitInput);
   };
 
+  if (currentUser?.role !== "admin") return <section className="personal-history"><div className="panel-heading"><div><p className="eyebrow">YOUR ACTIVITY</p><h3>Recent visits</h3></div></div>{recent.data?.length ? recent.data.slice(0, 8).map(row => <article key={row.id}><span className="personal-history-date">{row.visitDate}</span><div><strong>{row.customerName}</strong><small>{row.location} · {row.purpose}</small>{row.notes && <small>Notes: {row.notes}</small>}</div></article>) : <p className="page-subtitle">Your recent visits will appear here.</p>}</section>;
   if (showSuccess) return <section className="success-card"><div className="success-icon"><Check size={22} /></div><p className="eyebrow">SAVED TO THE VISIT LOG</p><h2>Visit recorded.</h2><p>Your visit is now included in the team’s field activity.</p><button className="button button-primary" onClick={() => { setForm(initialVisit(employeeInput)); setShowSuccess(false); }}>Log another visit <ArrowRight size={17} /></button></section>;
 
   return <form className="form-card" onSubmit={submit} noValidate>
@@ -136,7 +137,6 @@ function VisitEntryForm() {
     </div>
     <datalist id="field-customer-list">{customerHistory.map(row => <option key={row.id} value={row.customerName} />)}</datalist>
     <div className="form-bottom"><span className="draft-hint"><Save size={14} /> Draft saves on field blur</span><button className="button button-primary" type="submit" disabled={createVisit.isPending}>{createVisit.isPending ? "Saving…" : "Save visit log"}<ArrowRight size={17} /></button></div>
-    {currentUser?.role === "employee" && <section className="personal-history"><div className="panel-heading"><div><p className="eyebrow">YOUR ACTIVITY</p><h3>Recent visits</h3></div></div>{recent.data?.length ? recent.data.slice(0, 8).map(row => <article key={row.id}><span className="personal-history-date">{row.visitDate}</span><div><strong>{row.customerName}</strong><small>{row.location} · {row.purpose}</small></div><b>₹{Number(row.travelCost).toLocaleString("en-IN")}</b></article>) : <p className="page-subtitle">Your recent visits will appear here.</p>}</section>}
   </form>;
 }
 

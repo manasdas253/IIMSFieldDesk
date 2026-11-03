@@ -48,7 +48,8 @@ const visitColumns = [
 const todayVisitColumns = [
   ...visitColumns.slice(0, 3),
   { key: "visitedPersonName", label: "Visited person", sortValue: (row: VisitRow) => row.visitedPersonName ?? "", render: (row: VisitRow) => row.visitedPersonName || "—" },
-  ...visitColumns.slice(3),
+  ...visitColumns.slice(3, 6),
+  { key: "notes", label: "Notes", sortValue: (row: VisitRow) => row.notes ?? "", render: (row: VisitRow) => row.notes || "—" },
 ];
 
 export function OverviewView({ onViewWeeklyPlan, onViewAllVisits, onViewFollowUps }: { onViewWeeklyPlan: () => void; onViewAllVisits: () => void; onViewFollowUps: () => void }) {
